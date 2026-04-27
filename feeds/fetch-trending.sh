@@ -4,6 +4,10 @@
 # updates). Cached as an OSC 8 hyperlink line.
 #
 # Cache file: $HOME/.claude/cache/latest-trending.txt
+#
+# ▶ Want a different filter? Change DATE_7D to a longer window, swap the
+#   `sort` to `forks` or `updated`, or rewrite the query (e.g. add
+#   `language:rust`, `topic:llm`). The default is just one example.
 
 set -uo pipefail
 

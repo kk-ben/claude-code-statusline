@@ -133,15 +133,56 @@ To remove them: `bash install.sh --uninstall`.
 10 * * * * /path/to/feeds/fetch-trending.sh >/dev/null 2>&1
 ```
 
-### Optional: Japanese title translation
+### Optional: title translation (any language)
 
-Set `STATUSLINE_FEED_LANG=ja` in the environment that runs the fetch scripts. Requires the `claude` CLI to be on `$PATH`; falls back to English if it can't reach Claude. To enable for a LaunchAgent, add this to the plist:
+The default is **English — no setup needed, no `claude` CLI required**. If you want titles in your own language, set `STATUSLINE_FEED_LANG` in the environment that runs the fetch scripts. Built-in language codes:
+
+| Code | Language | Code | Language |
+|---|---|---|---|
+| `ja` | Japanese | `pt` | Portuguese |
+| `zh` | Simplified Chinese | `ru` | Russian |
+| `ko` | Korean | `ar` | Arabic |
+| `fr` | French | `de` | German |
+| `es` | Spanish | `en` (default) | no translation |
+
+Other codes are passed straight through to the translation prompt (e.g. `STATUSLINE_FEED_LANG=Vietnamese` works too).
+
+Translation requires the `claude` CLI on `$PATH` (uses Haiku with all tools disabled — fast and cheap). If the CLI is missing or returns nothing, the script silently falls back to the original English title.
+
+To enable for a LaunchAgent, add this to the plist:
 
 ```xml
 <key>EnvironmentVariables</key>
 <dict>
   <key>STATUSLINE_FEED_LANG</key><string>ja</string>
 </dict>
+```
+
+For cron, prefix the command: `STATUSLINE_FEED_LANG=zh /path/to/feeds/fetch-blog.sh`.
+
+---
+
+### Customize the feeds
+
+The three default feeds (Anthropic blog, HN top, GitHub trending) are **just examples** — swap them for whatever you actually read.
+
+- **Change the URL only** — open `feeds/fetch-blog.sh`, `feeds/fetch-hn.sh`, or `feeds/fetch-trending.sh` and replace the URL near the top. The OSC 8 hyperlink format and cache file path stay the same, so `statusline.sh` keeps reading them.
+- **Different parsing** — `fetch-blog.sh` uses `feeds/extract_blog.py` to scrape `claude.com/blog`. Replace it with your own one-liner that prints `<slug-or-path>|<title>`.
+- **Drop a feed entirely** — just don't run/install the corresponding fetcher. Missing cache files are silently skipped.
+- **Add a fourth feed** — write a new `fetch-<name>.sh` that writes `$HOME/.claude/cache/latest-<name>.txt`, then add that path to the `for feed_file in ...` loop in `statusline.sh`.
+
+The cache file format is:
+
+```
+<ESC>]8;;<URL><ESC>\<emoji> <title><ESC>]8;;<ESC>\
+```
+
+A literal example (newlines added for readability — the real file is one line):
+
+```
+\033]8;;https://example.com/post\
+🌟 Some clickable headline
+\033]8;;\
 ```
 
 ---
@@ -151,7 +192,7 @@ Set `STATUSLINE_FEED_LANG=ja` in the environment that runs the fetch scripts. Re
 | Env var | Default | Effect |
 |---|---|---|
 | `CLAUDE_STATUSLINE_COLS` | (auto-detected) | Force the column width used for layout decisions. Useful for debugging. |
-| `STATUSLINE_FEED_LANG` | `en` | `ja` enables Japanese translation of feed titles via the `claude` CLI. |
+| `STATUSLINE_FEED_LANG` | `en` | Target language for feed title translation (`ja`, `zh`, `ko`, `fr`, `es`, `de`, `pt`, `ru`, `ar`, or any other language name). Requires the `claude` CLI; falls back to English silently. |
 | `INSTALL_DIR` (installer) | `$HOME/.claude/cc-statusline` | Where the installer copies files. |
 | `LABEL_PREFIX` (installer) | `com.${USER}.cc-statusline` | LaunchAgent label prefix. |
 

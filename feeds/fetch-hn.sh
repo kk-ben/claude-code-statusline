@@ -4,7 +4,12 @@
 #
 # Cache file: $HOME/.claude/cache/latest-hn.txt
 #
-# See fetch-blog.sh for STATUSLINE_FEED_LANG=ja translation behavior.
+# ▶ Want a different feed? Replace the firebase URL below with any JSON API
+#   that returns a story id + title + url, or fetch a different RSS source
+#   entirely — this script is just an example.
+#
+# Translation: see fetch-blog.sh header for the full STATUSLINE_FEED_LANG
+# language list. Default = English (no translation, no claude CLI required).
 
 set -uo pipefail
 
@@ -40,24 +45,36 @@ if [ "$TOP_ID" = "$PREV_ID" ] && [ -s "$CACHE_FILE" ]; then
   log "unchanged: $TOP_ID"; exit 0
 fi
 
-# 4. Optional translation via local `claude` CLI
+# 4. Optional translation via local `claude` CLI (any target language)
 TITLE_OUT=""
 LANG_PREF="${STATUSLINE_FEED_LANG:-en}"
-if [ "$LANG_PREF" = "ja" ]; then
+if [ "$LANG_PREF" != "en" ] && [ -n "$LANG_PREF" ]; then
+  case "$LANG_PREF" in
+    ja) LANG_NAME="Japanese" ;;
+    zh) LANG_NAME="Simplified Chinese" ;;
+    ko) LANG_NAME="Korean" ;;
+    fr) LANG_NAME="French" ;;
+    es) LANG_NAME="Spanish" ;;
+    de) LANG_NAME="German" ;;
+    pt) LANG_NAME="Portuguese" ;;
+    ru) LANG_NAME="Russian" ;;
+    ar) LANG_NAME="Arabic" ;;
+    *)  LANG_NAME="$LANG_PREF" ;;
+  esac
   CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
   [ -z "$CLAUDE_BIN" ] && [ -x "/opt/homebrew/bin/claude" ] && CLAUDE_BIN="/opt/homebrew/bin/claude"
   if [ -n "$CLAUDE_BIN" ]; then
-    PROMPT="You are an offline translator. Translate the English news/tech headline below to natural concise Japanese (20 to 30 Japanese characters). Output ONLY the Japanese translation on a single line. No quotes, no markdown, no romanization, no explanation. Do not search or browse.
+    PROMPT="You are an offline translator. Translate the English news/tech headline below to natural concise ${LANG_NAME}. Aim for roughly 30 to 40 display cells. Output ONLY the translation on a single line. No quotes, no markdown, no romanization, no explanation. Do not search or browse.
 
 Headline: ${TITLE_EN}"
-    RAW_JA=$(perl -e 'alarm(60); exec @ARGV' -- \
+    RAW=$(perl -e 'alarm(60); exec @ARGV' -- \
       "$CLAUDE_BIN" -p \
       --model claude-haiku-4-5-20251001 \
       --disallowed-tools "Bash Read Write Edit WebFetch WebSearch Glob Grep TodoWrite Skill Agent NotebookEdit" \
       --output-format text \
       "$PROMPT" 2>/dev/null || true)
-    if [ -n "$RAW_JA" ]; then
-      TITLE_OUT=$(printf '%s' "$RAW_JA" | python3 "$SCRIPT_DIR/sanitize_title.py" 2>/dev/null || true)
+    if [ -n "$RAW" ]; then
+      TITLE_OUT=$(printf '%s' "$RAW" | python3 "$SCRIPT_DIR/sanitize_title.py" 2>/dev/null || true)
     fi
   fi
 fi
