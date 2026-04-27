@@ -272,6 +272,34 @@ The "last skill" segment also tails the last ~500 lines of `transcript_path` loo
 
 ---
 
+## Known Issues
+
+### Scrollback duplication during long thinking sessions
+
+**Symptom**: On Claude Code v2.1.x (verified on 2.1.119), long-thinking responses (e.g. `xhigh` effort, multi-minute) cause the entire TUI viewport — welcome banner, prompt line, assistant message, status bar — to be re-emitted to primary scrollback 2–5 times at slightly different column widths. The session jsonl is unaffected — pure rendering artifact.
+
+This affects any non-trivial multi-line statusline (including this one); it is **not specific to this repo**.
+
+**Root cause** (upstream): Claude Code v2.1.101 introduced a regression where SIGWINCH / relayout events leak the entire transcript into primary scrollback instead of redrawing in place. Statusline updates (which fire on every spinner tick during thinking) count as relayout triggers. Tracked in [anthropics/claude-code#46834](https://github.com/anthropics/claude-code/issues/46834), [#52547](https://github.com/anthropics/claude-code/issues/52547), [#51828](https://github.com/anthropics/claude-code/issues/51828).
+
+**Workaround**: set `CLAUDE_CODE_NO_FLICKER=1` in `~/.claude/settings.json` env section:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_NO_FLICKER": "1"
+  }
+}
+```
+
+This opts into Claude Code's alt-screen rendering with virtualized scrollback (documented in upstream `CHANGELOG.md`), restoring the pre-2.1.101 behavior.
+
+**Tradeoff**: alt-screen mode clears the visible viewport on Claude Code exit, so terminal scrollback no longer holds conversation history. Use `/resume` or `~/.claude/projects/<project>/<session>.jsonl` to review past sessions.
+
+Once Anthropic resolves the upstream regression, this env var can be removed.
+
+---
+
 ## Repo layout
 
 ```
