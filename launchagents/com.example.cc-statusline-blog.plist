@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template — install.sh substitutes the following placeholders:
+    __HOME__       → absolute $HOME path (e.g. /Users/alice)
+    __INSTALL__    → absolute install dir of this repo's feeds/ (e.g. /Users/alice/.claude/cc-statusline/feeds)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.cc-statusline-blog</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>__INSTALL__/fetch-blog.sh</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>3600</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.claude/cache/latest-blog.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.claude/cache/latest-blog.stderr.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

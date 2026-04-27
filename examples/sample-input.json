@@ -1,0 +1,14 @@
+{
+  "model": { "display_name": "Opus 4.7 (1M context)" },
+  "workspace": { "current_dir": "/tmp/claude-code-statusline" },
+  "transcript_path": "",
+  "session_id": "demo-session-id",
+  "context_window": { "used_percentage": 42 },
+  "rate_limits": { "seven_day": { "used_percentage": 18 } },
+  "cost": {
+    "total_cost_usd": 0.42,
+    "total_duration_ms": 725000,
+    "total_lines_added": 120,
+    "total_lines_removed": 33
+  }
+}
