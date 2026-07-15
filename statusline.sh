@@ -2,9 +2,9 @@
 # claude-code-statusline
 # A 2-line rich statusLine for Claude Code (https://claude.com/claude-code).
 #
-# Line 1:  [model] 📁 dir | 🌿 git-branch | 🪄 last-skill
-# Line 2:  🤖▓▓▓░░ 42% │ 📅▓░░░░ 18% │ +120 -33 │ ●3 ✓2/5 │ $0.42 ⏱12m05s
-# Line 3+: optional feeds (Anthropic blog / HN top / GitHub trending)
+# Line 1: [model] 📁 dir | 🌿 git-branch | 🪄 last-skill
+# Line 2: 🤖▓▓▓░░ 42% │ 📅▓░░░░ 18% │ 📖▓░░░░ 17% │ +120 -33 │ ●3 ✓2/5 │ $0.42 ⏱12m05s
+# Line 3: (optional) per-model token usage, main loop vs subagents — F 4.8M/0 │ O 0/0 │ S 18.8M/521.9k │ H 0/0
 #
 # Designed to be invoked from settings.json:
 #   "statusLine": { "type": "command", "command": "bash <path>/statusline.sh" }
@@ -17,11 +17,6 @@ input=$(cat)
 GREEN='\033[32m'
 YELLOW='\033[33m'
 RED='\033[31m'
-# BLUE and RESET hold *raw* ESC bytes because they're concatenated directly
-# next to an OSC 8 hyperlink terminator (ESC \). Keeping them as literal
-# "\033..." strings would merge with the trailing backslash and `%b` would
-# collapse the pair, leaving the visible glitch "033[0m" after the link.
-BLUE=$'\033[94m'
 DIM='\033[2m'
 RESET=$'\033[0m'
 
@@ -65,6 +60,19 @@ make_bar() {
   while [ $i -lt "$empty" ]; do bar="${bar}░"; i=$((i+1)); done
 
   printf "%b%s%b" "$color" "$bar" "$RESET"
+}
+
+# --- Format a token count as an integer, "N.Nk", or "N.NM" (integer math only) ---
+fmt_tok() {
+  local n="${1:-0}"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -ge 1000000 ]; then
+    printf "%d.%dM" $(( n / 1000000 )) $(( (n * 10 / 1000000) % 10 ))
+  elif [ "$n" -ge 1000 ]; then
+    printf "%d.%dk" $(( n / 1000 )) $(( (n * 10 / 1000) % 10 ))
+  else
+    printf "%d" "$n"
+  fi
 }
 
 # --- Extract fields ---
@@ -203,6 +211,122 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
       tmp_file="${fcost_cache_file}.tmp.$$"
       printf '%s\n' "$cost" > "$tmp_file" 2>/dev/null
       mv -f "$tmp_file" "$fcost_cache_file" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+fi
+
+# --- Per-model token breakdown: main loop vs subagents (cached, refreshed async) ---
+# Replaces the optional feeds line. Sums input+output+cache tokens per model
+# family (Fable/Opus/Sonnet/Haiku, matched by substring in message.model),
+# split into "main loop" (transcript_path itself) vs "subagents" (every
+# agent-*.jsonl under <transcript_dir>/<session_id>/subagents/, one file per
+# spawned subagent — this is where Task/Agent-tool subagent turns are logged,
+# separately from the main transcript). Same dedup-by-message.id rationale as
+# the Fable-only cost block above: each turn can appear 2-3x per file.
+# "New" tokens = input + output + cache_creation (freshly processed this turn).
+# "Cache" tokens = cache_read (context re-read from cache at a 90% discount) —
+# kept separate because in a long session this can dwarf the new-token count
+# (e.g. re-reading a 100k-token context on every one of 40 turns) and summing
+# it into a single "tokens used" figure looks wildly inflated.
+#
+# Per model family, per scope (main loop / subagents), 2 numbers: new, cache.
+# Format: F n<new>/c<cache> ↳n<new>/c<cache> — the part after ↳ is subagents.
+model_tokens_line=""
+if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+  mtok_cache_dir="$HOME/.claude/cache"
+  mtok_cache_file="$mtok_cache_dir/fable-model-tokens-${session_id}.txt"
+  mtok_lock_dir="$mtok_cache_dir/fable-model-tokens-${session_id}.lock"
+  mtok_ttl=20
+
+  # Cache line layout: 8 fields per scope × 2 scopes = 16 numbers, in the
+  # order: main(f_new f_cache o_new o_cache s_new s_cache h_new h_cache)
+  # then the same 8 fields again for subagents.
+  if [ -f "$mtok_cache_file" ]; then
+    IFS=' ' read -r m_fn m_fc m_on m_oc m_sn m_sc m_hn m_hc \
+                    s_fn s_fc s_on s_oc s_sn s_sc s_hn s_hc < "$mtok_cache_file" 2>/dev/null
+    valid=1
+    for v in "$m_fn" "$m_fc" "$m_on" "$m_oc" "$m_sn" "$m_sc" "$m_hn" "$m_hc" \
+             "$s_fn" "$s_fc" "$s_on" "$s_oc" "$s_sn" "$s_sc" "$s_hn" "$s_hc"; do
+      case "$v" in ''|*[!0-9]*) valid=0 ;; esac
+    done
+    if [ "$valid" = "1" ]; then
+      model_tokens_line=$(printf 'F n%s/c%s ↳n%s/c%s │ O n%s/c%s ↳n%s/c%s │ S n%s/c%s ↳n%s/c%s │ H n%s/c%s ↳n%s/c%s' \
+        "$(fmt_tok "$m_fn")" "$(fmt_tok "$m_fc")" "$(fmt_tok "$s_fn")" "$(fmt_tok "$s_fc")" \
+        "$(fmt_tok "$m_on")" "$(fmt_tok "$m_oc")" "$(fmt_tok "$s_on")" "$(fmt_tok "$s_oc")" \
+        "$(fmt_tok "$m_sn")" "$(fmt_tok "$m_sc")" "$(fmt_tok "$s_sn")" "$(fmt_tok "$s_sc")" \
+        "$(fmt_tok "$m_hn")" "$(fmt_tok "$m_hc")" "$(fmt_tok "$s_hn")" "$(fmt_tok "$s_hc")")
+    fi
+  fi
+
+  mtok_age=999999
+  if [ -f "$mtok_cache_file" ]; then
+    mtok_mtime=$(stat -f %m "$mtok_cache_file" 2>/dev/null || stat -c %Y "$mtok_cache_file" 2>/dev/null)
+    if [ -n "$mtok_mtime" ]; then
+      mtok_age=$(( $(date +%s) - mtok_mtime ))
+    fi
+  fi
+
+  if [ "$mtok_age" -ge "$mtok_ttl" ] 2>/dev/null; then
+    if [ -d "$mtok_lock_dir" ]; then
+      mtok_lock_mtime=$(stat -f %m "$mtok_lock_dir" 2>/dev/null || stat -c %Y "$mtok_lock_dir" 2>/dev/null)
+      if [ -n "$mtok_lock_mtime" ] && [ $(( $(date +%s) - mtok_lock_mtime )) -gt 30 ]; then
+        rmdir "$mtok_lock_dir" 2>/dev/null
+      fi
+    fi
+    (
+      mkdir "$mtok_lock_dir" 2>/dev/null || exit 0
+      trap 'rmdir "$mtok_lock_dir" 2>/dev/null' EXIT
+      mkdir -p "$mtok_cache_dir" 2>/dev/null
+
+      per_model_jq='
+        def newtok(u): (u.input_tokens // 0) + (u.output_tokens // 0) + (u.cache_creation_input_tokens // 0);
+        def cachetok(u): (u.cache_read_input_tokens // 0);
+        ([inputs | select(.type=="assistant")] | unique_by(.message.id)) as $d
+        | ($d | map(select((.message.model // "") | test("fable";"i"))))  as $f
+        | ($d | map(select((.message.model // "") | test("opus";"i"))))   as $o
+        | ($d | map(select((.message.model // "") | test("sonnet";"i")))) as $s
+        | ($d | map(select((.message.model // "") | test("haiku";"i"))))  as $h
+        | [
+            ($f | map(newtok(.message.usage)) | add // 0), ($f | map(cachetok(.message.usage)) | add // 0),
+            ($o | map(newtok(.message.usage)) | add // 0), ($o | map(cachetok(.message.usage)) | add // 0),
+            ($s | map(newtok(.message.usage)) | add // 0), ($s | map(cachetok(.message.usage)) | add // 0),
+            ($h | map(newtok(.message.usage)) | add // 0), ($h | map(cachetok(.message.usage)) | add // 0)
+          ] | @tsv
+      '
+
+      is_digits() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
+
+      read -r mfn mfc mon moc msn msc mhn mhc < <("$JQ" -r "$per_model_jq" "$transcript_path" 2>/dev/null)
+      for v in mfn mfc mon moc msn msc mhn mhc; do
+        is_digits "${!v}" || eval "$v=0"
+      done
+
+      sfn=0; sfc=0; son=0; soc=0; ssn=0; ssc=0; shn=0; shc=0
+      transcript_dir="$(dirname "$transcript_path")"
+      transcript_stem="$(basename "$transcript_path" .jsonl)"
+      subagents_dir="$transcript_dir/$transcript_stem/subagents"
+      if [ -d "$subagents_dir" ]; then
+        for af in "$subagents_dir"/agent-*.jsonl; do
+          [ -f "$af" ] || continue
+          read -r afn afc aon aoc asn asc ahn ahc < <("$JQ" -r "$per_model_jq" "$af" 2>/dev/null)
+          skip=0
+          for v in afn afc aon aoc asn asc ahn ahc; do
+            is_digits "${!v}" || skip=1
+          done
+          [ "$skip" = "1" ] && continue
+          sfn=$(( sfn + afn )); sfc=$(( sfc + afc ))
+          son=$(( son + aon )); soc=$(( soc + aoc ))
+          ssn=$(( ssn + asn )); ssc=$(( ssc + asc ))
+          shn=$(( shn + ahn )); shc=$(( shc + ahc ))
+        done
+      fi
+
+      tmp_file="${mtok_cache_file}.tmp.$$"
+      printf '%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n' \
+        "$mfn" "$mfc" "$mon" "$moc" "$msn" "$msc" "$mhn" "$mhc" \
+        "$sfn" "$sfc" "$son" "$soc" "$ssn" "$ssc" "$shn" "$shc" > "$tmp_file" 2>/dev/null
+      mv -f "$tmp_file" "$mtok_cache_file" 2>/dev/null
     ) >/dev/null 2>&1 &
     disown 2>/dev/null || true
   fi
@@ -437,19 +561,6 @@ metrics=()
 [ -n "$local_state" ]  && metrics+=("$local_state")
 metrics+=("${cost_str} ⏱${duration_str}")
 
-# Feeds: blog / HN top / GitHub trending (OSC 8 hyperlinks, bright blue).
-# Cache files are populated by the optional fetch scripts in feeds/.
-# Missing files are silently skipped.
-feeds=()
-for feed_file in \
-    "$HOME/.claude/cache/latest-blog.txt" \
-    "$HOME/.claude/cache/latest-hn.txt" \
-    "$HOME/.claude/cache/latest-trending.txt"; do
-  if [ -s "$feed_file" ]; then
-    feeds+=("${BLUE}$(cat "$feed_file")${RESET}")
-  fi
-done
-
 # Join an array of sections with " │ "
 join_sections() {
   local out=""
@@ -465,28 +576,9 @@ join_sections() {
   printf '%b\n' "$out"
 }
 
-# --- Dynamic layout by width ---
-# Thresholds tuned for default iTerm2 / macOS Terminal font metrics.
-# Roughly: metrics alone ~70 cols, each feed ~35-45 cols.
-#
-# width ≥ 210 : 2 lines  (metrics + 3 feeds on the same row)
-# width ≥ 140 : 3 lines  (metrics / all feeds together)
-# width ≥ 90  : 4 lines  (metrics / blog / HN+trending)
-# width <  90 : 5 lines  (metrics / blog / HN / trending)
-if [ "$term_cols" -ge 210 ]; then
-  join_sections "${metrics[@]}" "${feeds[@]}"
-elif [ "$term_cols" -ge 140 ]; then
-  join_sections "${metrics[@]}"
-  [ "${#feeds[@]}" -gt 0 ] && join_sections "${feeds[@]}"
-elif [ "$term_cols" -ge 90 ]; then
-  join_sections "${metrics[@]}"
-  [ "${#feeds[@]}" -gt 0 ] && printf '%b\n' "${feeds[0]}"
-  if [ "${#feeds[@]}" -gt 1 ]; then
-    join_sections "${feeds[@]:1}"
-  fi
-else
-  join_sections "${metrics[@]}"
-  for feed in "${feeds[@]}"; do
-    printf '%b\n' "$feed"
-  done
-fi
+# --- LINE 2: metrics ---
+join_sections "${metrics[@]}"
+
+# --- LINE 3 (optional): per-model token usage, main loop vs subagents ---
+[ -n "$model_tokens_line" ] && printf '%s\n' "$model_tokens_line"
+exit 0
