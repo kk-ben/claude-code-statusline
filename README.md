@@ -26,7 +26,7 @@ The third line shrinks/expands automatically based on terminal width — see [La
 | `+N -M` | lines added / removed in this session |
 | `●N` / `✓` | git dirty file count, or green check if clean |
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
-| `$X.XX ⏱H:MMmSSs` | session cost and total duration |
+| `$X.XX ⏱H:MMmSSs` | Fable-5-only cost this session (not the blended stdin total — see [Fable-only session cost](#fable-only-session-cost)) and total duration |
 | Feeds (optional) | latest Anthropic blog post, current HN top story, top GitHub repo created in last 7 days — all OSC 8 hyperlinks (Cmd+click in iTerm2 / WezTerm / kitty / new Terminal.app) |
 
 ---
@@ -257,6 +257,8 @@ Claude Code invokes the statusLine command on every UI tick, piping a JSON paylo
 
 Anything missing renders as `—` or is omitted. Output goes to stdout; exit code is ignored.
 
+Note: `cost.total_cost_usd` is present in the stdin payload but intentionally not read — the `$X.XX` segment shows a Fable-only figure recomputed from `transcript_path` instead. See [Fable-only session cost](#fable-only-session-cost).
+
 The "last skill" segment also tails the last ~500 lines of `transcript_path` looking for `tool_use` entries with `name == "Skill"`. The "task progress" segment reads `~/.claude/tasks/<session_id>/*.json` (Claude Code's TaskCreate state).
 
 ---
@@ -286,6 +288,34 @@ Nothing in this path is written to git or logged; only the single cached percent
 
 ---
 
+## Fable-only session cost
+
+`cost.total_cost_usd` in the stdin payload is Claude Code's dollar-equivalent for the *whole* session, blended across every model used — main loop plus any subagents. For a workflow where subagents run on a subscription-included model (e.g. Sonnet, no extra charge) and only the main-loop model is Fable 5 (which can incur real overage billing), that blended total is misleading: it looks like it's costing money even when the subagent share is actually free. The `$X.XX` segment instead shows a Fable-5-only figure, recomputed locally:
+
+1. On each invocation, the script reads `~/.claude/cache/fable-cost-<session_id>.txt` (a cached dollar amount) if present — no transcript parsing on the hot path.
+2. If that cache is missing or older than 15s, a background subshell is forked to refresh it, same non-blocking pattern as the weekly gauge above.
+3. The refresher streams `transcript_path` (the session's local JSONL transcript) through `jq`:
+   - Filters to `type == "assistant"` entries.
+   - **Dedupes by `message.id`** first — Claude Code re-emits the same message (identical `usage` numbers) as its content blocks stream in, so a turn can appear 2-3x in the file; summing without dedup inflates the cost 2-3x.
+   - Keeps only turns where `message.model` starts with `claude-fable-5` (covers both Fable 5 and any Fable-5-family variant, e.g. Mythos 5, which share pricing).
+   - Sums `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and the two `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` cache-write buckets separately.
+   - Converts to dollars using Claude Fable 5's official per-token pricing (verified 2026-07-16 against [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing)):
+
+     | Token type | Price |
+     |---|---|
+     | Input | $10 / MTok |
+     | 5-minute cache write | $12.50 / MTok |
+     | 1-hour cache write | $20 / MTok |
+     | Cache read (hit) | $1 / MTok |
+     | Output | $50 / MTok |
+
+4. The result is written atomically (`.tmp.$$` + `mv`) behind a per-session `mkdir` lock (self-clearing after 30s if stale), identical mechanics to the weekly gauge.
+5. If Fable was never used this session, or the transcript/cache isn't ready yet, the segment shows `$0.00` rather than hiding — it's a real "$0 spent on Fable so far," not a missing value.
+
+If Anthropic changes Fable 5's pricing, update the five constants in the `jq` formula inside the "Fable-only session cost" block in `statusline.sh` — they aren't fetched from anywhere.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
@@ -295,6 +325,7 @@ Nothing in this path is written to git or logged; only the single cached percent
 | Feeds never appear | Cache files missing/empty → run the fetch scripts manually to confirm they reach the network |
 | `🪄 —` always | Transcript path empty or no `Skill` tool calls yet this session |
 | `5️⃣` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check `~/.claude/.credentials.json` exists and `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
+| `$X.XX` always shows `$0.00` | Correct if Fable wasn't used this session. If Fable *was* used: check `transcript_path` is non-empty and readable, and wait ~15s for the first background refresh; see [Fable-only session cost](#fable-only-session-cost) |
 | Width detection wrong | Set `CLAUDE_STATUSLINE_COLS` to override |
 | Garbled `…033[0m` after a feed link | Old version. The current script handles raw ESC vs `%b` correctly. Reinstall. |
 

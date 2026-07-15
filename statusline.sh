@@ -75,7 +75,6 @@ transcript_path=$(echo "$input" | "$JQ" -r '.transcript_path // ""')
 session_id=$(echo "$input" | "$JQ" -r '.session_id // ""')
 ctx_used=$(echo "$input" | "$JQ" -r '.context_window.used_percentage // "null"')
 seven_day_pct=$(echo "$input" | "$JQ" -r '.rate_limits.seven_day.used_percentage // "null"')
-total_cost=$(echo "$input" | "$JQ" -r '.cost.total_cost_usd // "null"')
 total_duration_ms=$(echo "$input" | "$JQ" -r '.cost.total_duration_ms // "null"')
 lines_added=$(echo "$input" | "$JQ" -r '.cost.total_lines_added // 0')
 lines_removed=$(echo "$input" | "$JQ" -r '.cost.total_lines_removed // 0')
@@ -135,6 +134,78 @@ if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
     mv -f "$tmp_file" "$fable_cache_file" 2>/dev/null
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
+fi
+
+# --- Fable-only session cost (cached per-session, refreshed async) ---
+# cost.total_cost_usd in stdin is Claude Code's dollar-equivalent for the WHOLE
+# session across every model used (main loop + subagents). Subagents typically
+# run on Sonnet, which is subscription-included and never actually billed extra;
+# only Fable turns can incur real overage charges. So instead of showing that
+# blended total, this recomputes cost from the local transcript filtered to
+# Fable-model turns only, using official per-token pricing (verified 2026-07-16,
+# see https://platform.claude.com/docs/en/about-claude/pricing — update the
+# constants below if Anthropic changes Fable 5 pricing):
+#   input $10/MTok, 5m-cache-write $12.50/MTok, 1h-cache-write $20/MTok,
+#   cache-read(hit) $1/MTok, output $50/MTok
+#
+# Each transcript turn can appear multiple times as identical duplicate lines
+# (verified: same message.id, same usage numbers, up to 3x) because Claude Code
+# re-emits the full message as content blocks stream in — so turns are deduped
+# by message.id before summing, or the cost would be inflated 2-3x.
+fable_cost_str=""
+if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+  fcost_cache_dir="$HOME/.claude/cache"
+  fcost_cache_file="$fcost_cache_dir/fable-cost-${session_id}.txt"
+  fcost_lock_dir="$fcost_cache_dir/fable-cost-${session_id}.lock"
+  fcost_ttl=15
+
+  if [ -f "$fcost_cache_file" ]; then
+    cached_cost=$(cat "$fcost_cache_file" 2>/dev/null | tr -d '[:space:]')
+    case "$cached_cost" in
+      ''|*[!0-9.]*) : ;;
+      *) fable_cost_str=$(printf '$%.2f' "$cached_cost" 2>/dev/null) ;;
+    esac
+  fi
+
+  fcost_age=999999
+  if [ -f "$fcost_cache_file" ]; then
+    fcost_mtime=$(stat -f %m "$fcost_cache_file" 2>/dev/null || stat -c %Y "$fcost_cache_file" 2>/dev/null)
+    if [ -n "$fcost_mtime" ]; then
+      fcost_age=$(( $(date +%s) - fcost_mtime ))
+    fi
+  fi
+
+  if [ "$fcost_age" -ge "$fcost_ttl" ] 2>/dev/null; then
+    if [ -d "$fcost_lock_dir" ]; then
+      fcost_lock_mtime=$(stat -f %m "$fcost_lock_dir" 2>/dev/null || stat -c %Y "$fcost_lock_dir" 2>/dev/null)
+      if [ -n "$fcost_lock_mtime" ] && [ $(( $(date +%s) - fcost_lock_mtime )) -gt 30 ]; then
+        rmdir "$fcost_lock_dir" 2>/dev/null
+      fi
+    fi
+    (
+      mkdir "$fcost_lock_dir" 2>/dev/null || exit 0
+      trap 'rmdir "$fcost_lock_dir" 2>/dev/null' EXIT
+      mkdir -p "$fcost_cache_dir" 2>/dev/null
+      cost=$("$JQ" -n '
+        [inputs | select(.type=="assistant")] as $all
+        | ($all | unique_by(.message.id)) as $dedup
+        | ($dedup | map(select((.message.model // "") | startswith("claude-fable-5")) | .message.usage)) as $u
+        | ($u | map(.input_tokens // 0) | add // 0) as $in
+        | ($u | map(.output_tokens // 0) | add // 0) as $out
+        | ($u | map(.cache_read_input_tokens // 0) | add // 0) as $cread
+        | ($u | map(.cache_creation.ephemeral_5m_input_tokens // 0) | add // 0) as $c5m
+        | ($u | map(.cache_creation.ephemeral_1h_input_tokens // 0) | add // 0) as $c1h
+        | (($in*10 + $c5m*12.5 + $c1h*20 + $cread*1 + $out*50) / 1000000)
+      ' "$transcript_path" 2>/dev/null)
+      case "$cost" in
+        ''|*[!0-9.]*) exit 0 ;;
+      esac
+      tmp_file="${fcost_cache_file}.tmp.$$"
+      printf '%s\n' "$cost" > "$tmp_file" 2>/dev/null
+      mv -f "$tmp_file" "$fcost_cache_file" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
 fi
 
 # --- dir-last-3 (e.g. "parent/parent/basename") ---
@@ -323,11 +394,11 @@ if [ "$lines_added" != "0" ] || [ "$lines_removed" != "0" ]; then
   lines_seg=$(printf "%b+%s%b %b-%s%b" "$GREEN" "$lines_added" "$RESET" "$RED" "$lines_removed" "$RESET")
 fi
 
-# cost
-if [ "$total_cost" = "null" ]; then
-  cost_str="\$0.00"
+# cost (Fable-only, see the "Fable-only session cost" block above)
+if [ -n "$fable_cost_str" ]; then
+  cost_str="$fable_cost_str"
 else
-  cost_str=$(printf "\$%.2f" "$total_cost")
+  cost_str="\$0.00"
 fi
 
 # duration (h/m when long, m/s otherwise)
