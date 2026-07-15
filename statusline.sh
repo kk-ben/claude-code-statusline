@@ -80,6 +80,63 @@ total_duration_ms=$(echo "$input" | "$JQ" -r '.cost.total_duration_ms // "null"'
 lines_added=$(echo "$input" | "$JQ" -r '.cost.total_lines_added // 0')
 lines_removed=$(echo "$input" | "$JQ" -r '.cost.total_lines_removed // 0')
 
+# --- Fable weekly usage % (cached, refreshed async, never blocks statusline) ---
+fable_cache_dir="$HOME/.claude/cache"
+fable_cache_file="$fable_cache_dir/fable-weekly.txt"
+fable_lock_dir="$fable_cache_dir/fable-weekly.lock"
+fable_cache_ttl=300
+
+fable_weekly_pct=""
+if [ -f "$fable_cache_file" ]; then
+  cached_val=$(cat "$fable_cache_file" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$cached_val" ] && [ "$cached_val" -eq "$cached_val" ] 2>/dev/null; then
+    fable_weekly_pct="$cached_val"
+  fi
+fi
+
+fable_cache_age=999999
+if [ -f "$fable_cache_file" ]; then
+  fable_mtime=$(stat -f %m "$fable_cache_file" 2>/dev/null || stat -c %Y "$fable_cache_file" 2>/dev/null)
+  if [ -n "$fable_mtime" ]; then
+    fable_now=$(date +%s)
+    fable_cache_age=$(( fable_now - fable_mtime ))
+  fi
+fi
+
+if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
+  # Clear a stale lock (fetcher killed mid-flight) so refresh can't wedge forever
+  if [ -d "$fable_lock_dir" ]; then
+    lock_mtime=$(stat -f %m "$fable_lock_dir" 2>/dev/null || stat -c %Y "$fable_lock_dir" 2>/dev/null)
+    if [ -n "$lock_mtime" ] && [ $(( $(date +%s) - lock_mtime )) -gt 60 ]; then
+      rmdir "$fable_lock_dir" 2>/dev/null
+    fi
+  fi
+  (
+    mkdir "$fable_lock_dir" 2>/dev/null || exit 0
+    trap 'rmdir "$fable_lock_dir" 2>/dev/null' EXIT
+    mkdir -p "$fable_cache_dir" 2>/dev/null
+    creds_file="$HOME/.claude/.credentials.json"
+    [ -f "$creds_file" ] || exit 0
+    token=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+    [ -n "$token" ] || exit 0
+    resp=$(curl -s --max-time 5 \
+      -H "Authorization: Bearer $token" \
+      -H "Content-Type: application/json" \
+      -H "anthropic-beta: oauth-2025-04-20" \
+      "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+    [ -n "$resp" ] || exit 0
+    pct=$(echo "$resp" | "$JQ" -r '.limits[]? | select(.kind=="weekly_scoped" and .scope.model.display_name=="Fable") | .percent' 2>/dev/null | head -n 1)
+    [ -n "$pct" ] || exit 0
+    case "$pct" in
+      ''|*[!0-9]*) exit 0 ;;
+    esac
+    tmp_file="${fable_cache_file}.tmp.$$"
+    printf '%s\n' "$pct" > "$tmp_file" 2>/dev/null
+    mv -f "$tmp_file" "$fable_cache_file" 2>/dev/null
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+
 # --- dir-last-3 (e.g. "parent/parent/basename") ---
 dir_last3=""
 if [ -n "$current_dir" ]; then
@@ -253,6 +310,13 @@ if [ "$seven_day_pct" != "null" ]; then
   seven_seg=$(printf "📅%b %s%%" "$seven_bar" "$seven_pct_int")
 fi
 
+# Fable weekly rate (yellow 70, red 90)
+fable_seg=""
+if [ -n "$fable_weekly_pct" ]; then
+  fable_bar=$(make_bar "$fable_weekly_pct")
+  fable_seg=$(printf "5️⃣ %b %s%%" "$fable_bar" "$fable_weekly_pct")
+fi
+
 # lines added / removed this session
 lines_seg=""
 if [ "$lines_added" != "0" ] || [ "$lines_removed" != "0" ]; then
@@ -297,6 +361,7 @@ fi
 metrics=()
 [ -n "$ctx_seg" ]      && metrics+=("$ctx_seg")
 [ -n "$seven_seg" ]    && metrics+=("$seven_seg")
+[ -n "$fable_seg" ]    && metrics+=("$fable_seg")
 [ -n "$lines_seg" ]    && metrics+=("$lines_seg")
 [ -n "$local_state" ]  && metrics+=("$local_state")
 metrics+=("${cost_str} ⏱${duration_str}")

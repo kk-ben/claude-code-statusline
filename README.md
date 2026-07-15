@@ -4,7 +4,7 @@ A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with 
 
 ```
 [Opus 4.7] 📁 …/cc-statusline | 🌿 main | 🪄 superpowers:brainstorming
-🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
+🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ 5️⃣ █▋░░░░░░░░ 17% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
 📝 Introducing connectors for everyday Claude  │  🔥 I bought Friendster for $30k …  │  🐙 op7418/guizang-ppt-skill ★2.9k
 ```
 
@@ -22,6 +22,7 @@ The third line shrinks/expands automatically based on terminal width — see [La
 | `🪄 last-skill` | most recent `Skill` tool call from the session transcript |
 | `🤖 ctx-bar` | context window % with smooth 8th-block bar (yellow ≥50, red ≥60) |
 | `📅 7d-bar` | 7-day rate limit % (yellow ≥70, red ≥90) |
+| `5️⃣ Fable-bar` | Fable 5 weekly usage % (yellow ≥70, red ≥90) — fetched separately from `/api/oauth/usage` and cached, since it isn't in the stdin payload; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `+N -M` | lines added / removed in this session |
 | `●N` / `✓` | git dirty file count, or green check if clean |
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
@@ -203,6 +204,7 @@ Edit `make_bar` calls in `statusline.sh`:
 ```bash
 ctx_bar=$(make_bar "$ctx_used" 50 60)        # context: yellow ≥50, red ≥60
 seven_bar=$(make_bar "$seven_day_pct")       # 7d rate: yellow ≥70 (default), red ≥90 (default)
+fable_bar=$(make_bar "$fable_weekly_pct")    # Fable weekly: yellow ≥70 (default), red ≥90 (default)
 ```
 
 ### Layout bands
@@ -259,6 +261,31 @@ The "last skill" segment also tails the last ~500 lines of `transcript_path` loo
 
 ---
 
+## Fable weekly gauge
+
+Claude Code's stdin payload only exposes `rate_limits.seven_day` (the overall weekly limit) — it does not include a Fable-5-specific number. That figure only exists in the OAuth usage API, so the `5️⃣` gauge is fetched out-of-band instead of parsed from stdin:
+
+1. On each invocation, the script reads `~/.claude/cache/fable-weekly.txt` (a single integer, 0–100) if present and renders the gauge from it immediately — no network call on the hot path.
+2. If that cache is missing or older than 300s, a background subshell is forked (`( ... ) & disown`) to refresh it; the visible statusLine for *this* tick is never blocked on the network.
+3. The refresher reads the OAuth access token from `~/.claude/.credentials.json` (`.claudeAiOauth.accessToken`), calls:
+   ```bash
+   curl -s --max-time 5 \
+     -H "Authorization: Bearer $token" \
+     -H "Content-Type: application/json" \
+     -H "anthropic-beta: oauth-2025-04-20" \
+     "https://api.anthropic.com/api/oauth/usage"
+   ```
+   and extracts the percent via:
+   ```bash
+   jq -r '.limits[]? | select(.kind=="weekly_scoped" and .scope.model.display_name=="Fable") | .percent'
+   ```
+4. The result is written to a `.tmp.$$` file and `mv`'d into place atomically. A `mkdir`-based lock (`fable-weekly.lock`, self-clearing after 60s if stale) prevents concurrent refreshers from racing.
+5. Any failure at any step (no credentials file, no token, curl error, non-numeric response) silently leaves the existing cache untouched — the gauge just shows the last known value, or hides itself if there's never been a successful fetch.
+
+Nothing in this path is written to git or logged; only the single cached percentage touches disk.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
@@ -267,6 +294,7 @@ The "last skill" segment also tails the last ~500 lines of `transcript_path` loo
 | Bars never colored / always green | `ctx_used` and `seven_day_pct` are `null` in stdin — your Claude Code may be older; the script just hides those segments |
 | Feeds never appear | Cache files missing/empty → run the fetch scripts manually to confirm they reach the network |
 | `🪄 —` always | Transcript path empty or no `Skill` tool calls yet this session |
+| `5️⃣` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check `~/.claude/.credentials.json` exists and `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
 | Width detection wrong | Set `CLAUDE_STATUSLINE_COLS` to override |
 | Garbled `…033[0m` after a feed link | Old version. The current script handles raw ESC vs `%b` correctly. Reinstall. |
 
