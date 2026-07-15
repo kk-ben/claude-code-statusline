@@ -79,6 +79,7 @@ fmt_tok() {
 JQ="$(command -v jq || echo /usr/bin/jq)"
 model=$(echo "$input" | "$JQ" -r '.model.display_name // ""')
 current_dir=$(echo "$input" | "$JQ" -r '.workspace.current_dir // ""')
+git_worktree_raw=$(echo "$input" | "$JQ" -r '.workspace.git_worktree // empty')
 transcript_path=$(echo "$input" | "$JQ" -r '.transcript_path // ""')
 session_id=$(echo "$input" | "$JQ" -r '.session_id // ""')
 ctx_used=$(echo "$input" | "$JQ" -r '.context_window.used_percentage // "null"')
@@ -362,6 +363,14 @@ if [ -n "$current_dir" ]; then
   fi
 fi
 
+# --- git worktree marker (🌲, only shown when workspace.git_worktree is truthy) ---
+worktree_marker=""
+case "$git_worktree_raw" in
+  ""|false|null) : ;;
+  true) worktree_marker=" 🌲" ;;
+  *) worktree_marker=" 🌲${git_worktree_raw}" ;;
+esac
+
 # --- git branch + dirty count ---
 git_branch="—"
 git_dirty_str=""
@@ -496,8 +505,8 @@ if [ "$skill_disp" != "—" ] && [ -n "$skill_disp" ]; then
   fi
 fi
 
-printf "[%s] 📁 %s | 🌿 %s | 🪄 %s\n" \
-  "$model_disp" "$dir_disp" "$git_branch" "$skill_disp"
+printf "[%s] 📁 %s | 🌿 %s%s | 🪄 %s\n" \
+  "$model_disp" "$dir_disp" "$git_branch" "$worktree_marker" "$skill_disp"
 
 # --- LINE 2 components ---
 

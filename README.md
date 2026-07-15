@@ -19,6 +19,7 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 | `[model]` | `display_name` from Claude Code stdin (e.g. `Opus 4.7`); strips `(...)` parenthetical when terminal is narrow |
 | `📁 dir` | up to 3 trailing path components, collapses to basename on narrow terminals |
 | `🌿 git-branch` | current branch via `git branch --show-current` (`—` if not a repo) |
+| `🌲` (after branch) | appears only when `workspace.git_worktree` in stdin is truthy — a `git worktree` checkout rather than the main working tree. Shows the worktree name too if stdin gives one as a string, not just `true` |
 | `🪄 last-skill` | most recent `Skill` tool call from the session transcript |
 | `🤖 ctx-bar` | context window % with smooth 8th-block bar (yellow ≥50, red ≥60) |
 | `⏳ 5h-bar` | 5-hour session rate limit % (yellow ≥70, red ≥90) |
@@ -157,7 +158,7 @@ Claude Code invokes the statusLine command on every UI tick, piping a JSON paylo
 ```jsonc
 {
   "model":          { "display_name": "Opus 4.7 (1M context)" },
-  "workspace":      { "current_dir": "/abs/path/to/cwd" },
+  "workspace":      { "current_dir": "/abs/path/to/cwd", "git_worktree": true },
   "transcript_path": "/abs/path/to/transcript.jsonl",
   "session_id":     "uuid",
   "context_window": { "used_percentage": 42 },
