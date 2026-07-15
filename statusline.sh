@@ -385,7 +385,7 @@ fi
 fable_seg=""
 if [ -n "$fable_weekly_pct" ]; then
   fable_bar=$(make_bar "$fable_weekly_pct")
-  fable_seg=$(printf "5️⃣ %b %s%%" "$fable_bar" "$fable_weekly_pct")
+  fable_seg=$(printf "📖 %b %s%%" "$fable_bar" "$fable_weekly_pct")
 fi
 
 # lines added / removed this session

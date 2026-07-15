@@ -4,7 +4,7 @@ A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with 
 
 ```
 [Opus 4.7] 📁 …/cc-statusline | 🌿 main | 🪄 superpowers:brainstorming
-🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ 5️⃣ █▋░░░░░░░░ 17% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
+🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ 📖 █▋░░░░░░░░ 17% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
 📝 Introducing connectors for everyday Claude  │  🔥 I bought Friendster for $30k …  │  🐙 op7418/guizang-ppt-skill ★2.9k
 ```
 
@@ -22,7 +22,7 @@ The third line shrinks/expands automatically based on terminal width — see [La
 | `🪄 last-skill` | most recent `Skill` tool call from the session transcript |
 | `🤖 ctx-bar` | context window % with smooth 8th-block bar (yellow ≥50, red ≥60) |
 | `📅 7d-bar` | 7-day rate limit % (yellow ≥70, red ≥90) |
-| `5️⃣ Fable-bar` | Fable 5 weekly usage % (yellow ≥70, red ≥90) — fetched separately from `/api/oauth/usage` and cached, since it isn't in the stdin payload; see [Fable weekly gauge](#fable-weekly-gauge) |
+| `📖 Fable-bar` | Fable 5 weekly usage % (yellow ≥70, red ≥90) — fetched separately from `/api/oauth/usage` and cached, since it isn't in the stdin payload; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `+N -M` | lines added / removed in this session |
 | `●N` / `✓` | git dirty file count, or green check if clean |
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
@@ -265,7 +265,7 @@ The "last skill" segment also tails the last ~500 lines of `transcript_path` loo
 
 ## Fable weekly gauge
 
-Claude Code's stdin payload only exposes `rate_limits.seven_day` (the overall weekly limit) — it does not include a Fable-5-specific number. That figure only exists in the OAuth usage API, so the `5️⃣` gauge is fetched out-of-band instead of parsed from stdin:
+Claude Code's stdin payload only exposes `rate_limits.seven_day` (the overall weekly limit) — it does not include a Fable-5-specific number. That figure only exists in the OAuth usage API, so the `📖` gauge is fetched out-of-band instead of parsed from stdin:
 
 1. On each invocation, the script reads `~/.claude/cache/fable-weekly.txt` (a single integer, 0–100) if present and renders the gauge from it immediately — no network call on the hot path.
 2. If that cache is missing or older than 300s, a background subshell is forked (`( ... ) & disown`) to refresh it; the visible statusLine for *this* tick is never blocked on the network.
@@ -324,7 +324,7 @@ If Anthropic changes Fable 5's pricing, update the five constants in the `jq` fo
 | Bars never colored / always green | `ctx_used` and `seven_day_pct` are `null` in stdin — your Claude Code may be older; the script just hides those segments |
 | Feeds never appear | Cache files missing/empty → run the fetch scripts manually to confirm they reach the network |
 | `🪄 —` always | Transcript path empty or no `Skill` tool calls yet this session |
-| `5️⃣` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check `~/.claude/.credentials.json` exists and `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
+| `📖` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check `~/.claude/.credentials.json` exists and `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `$X.XX` always shows `$0.00` | Correct if Fable wasn't used this session. If Fable *was* used: check `transcript_path` is non-empty and readable, and wait ~15s for the first background refresh; see [Fable-only session cost](#fable-only-session-cost) |
 | Width detection wrong | Set `CLAUDE_STATUSLINE_COLS` to override |
 | Garbled `…033[0m` after a feed link | Old version. The current script handles raw ESC vs `%b` correctly. Reinstall. |
