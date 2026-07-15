@@ -1,14 +1,14 @@
 # claude-code-statusline
 
-A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with smooth Unicode gauges, git status, last-invoked skill, task progress, Fable-only cost / duration, and a per-model token breakdown (main loop vs subagents).
+A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with smooth Unicode gauges, git status, last-invoked skill, task progress, Fable-only cost / duration, and a per-model token breakdown.
 
 ```
 [Opus 4.7] 📁 …/cc-statusline | 🌿 main | 🪄 superpowers:brainstorming
 🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ 📖 █▋░░░░░░░░ 17% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
-F n191.0k/c4.6M ↳n0/c0 │ O n0/c0 ↳n0/c0 │ S n589.9k/c30.2M ↳n52.9k/c469.0k │ H n0/c0 ↳n0/c0
+F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c43.7M │ H n0/c0
 ```
 
-The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many tokens were newly processed (`n`) vs read from prompt cache (`c`) this session — first for the main loop, then (after `↳`) for subagents. See [Per-model token breakdown](#per-model-token-breakdown).
+The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many tokens were newly processed (`n`) vs read from prompt cache (`c`) this session — combined across the main loop and any subagents (a token costs the same either way). See [Per-model token breakdown](#per-model-token-breakdown).
 
 ---
 
@@ -27,7 +27,7 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 | `●N` / `✓` | git dirty file count, or green check if clean |
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
 | `$X.XX ⏱H:MMmSSs` | Fable-5-only cost this session (not the blended stdin total — see [Fable-only session cost](#fable-only-session-cost)) and total duration |
-| `F n../c.. ↳n../c.. │ O ... │ S ... │ H ...` (line 3) | Per model family (Fable/Opus/Sonnet/Haiku), new-vs-cached tokens this session — `n`=input+output+cache-write, `c`=cache-read; before `↳` is the main loop, after it is subagents — see [Per-model token breakdown](#per-model-token-breakdown) |
+| `F n../c.. │ O n../c.. │ S ... │ H ...` (line 3) | Per model family (Fable/Opus/Sonnet/Haiku), new-vs-cached tokens this session (main loop + subagents combined) — `n`=input+output+cache-write, `c`=cache-read — see [Per-model token breakdown](#per-model-token-breakdown) |
 
 ---
 
@@ -86,18 +86,17 @@ The `feeds/*` scripts from earlier versions still exist in this repo but are no 
 
 ## Per-model token breakdown
 
-Line 3 answers "how much did each model actually do this session, and how much of that was fresh work vs re-reading cached context?" — split by model family and by main-loop vs subagent.
+Line 3 answers "how much did each model actually do this session, and how much of that was fresh work vs re-reading cached context?" — split by model family only, not by main-loop vs subagent (a token costs the same regardless of which one processed it — that distinction only matters for the [$ cost segment](#fable-only-session-cost), where subagents commonly run on a different, subscription-included model).
 
-1. On each invocation, the script reads `~/.claude/cache/fable-model-tokens-<session_id>.txt` (16 cached integers) if present — no transcript parsing on the hot path.
+1. On each invocation, the script reads `~/.claude/cache/fable-model-tokens-<session_id>.txt` (8 cached integers) if present — no transcript parsing on the hot path.
 2. If that cache is missing or older than 20s, a background subshell refreshes it, same non-blocking pattern as the gauges above.
-3. The refresher computes two numbers per model family, per scope:
+3. The refresher computes two numbers per model family, combining the main transcript (`transcript_path`) with every `agent-*.jsonl` under `<transcript_dir>/<session_id>/subagents/` (that's where Claude Code logs each Task/Agent-tool-spawned subagent's own turns, separately from the main transcript). Each file is deduped by `message.id` independently before summing (same duplicate-turn issue as the Fable-only cost block — a turn can appear 2-3x per file as content blocks stream in), then the per-file sums are added together:
    - **`n` (new)** — `input_tokens + output_tokens + cache_creation_input_tokens`: tokens freshly processed or newly written to cache this turn.
    - **`c` (cache)** — `cache_read_input_tokens`: tokens re-read from a previous cache write, billed at a 90% discount.
 
    These are kept separate because summing them into one "tokens used" figure is misleading in a long session: re-reading a large accumulated context on every turn (`c`) can dwarf the actual new content (`n`) by 10-20x, making token usage look far higher than the work actually done.
 4. **Model family** is matched by substring in `message.model` (`fable`, `opus`, `sonnet`, `haiku` — case-insensitive), so it covers any dated/variant model id (`claude-fable-5`, `claude-opus-4-8`, etc.) without needing exact version strings.
-5. **Scope** — main loop is `transcript_path` itself; subagents are every `agent-*.jsonl` under `<transcript_dir>/<session_id>/subagents/` (that's where Claude Code logs each Task/Agent-tool-spawned subagent's own turns, separately from the main transcript). Each file is deduped by `message.id` independently before summing (same duplicate-turn issue as the Fable-only cost block — a turn can appear 2-3x per file as content blocks stream in) and the per-file sums are added together.
-6. The result renders as, per model: `F n<new>/c<cache> ↳n<new>/c<cache>` — the part before `↳` is the main loop, the part after is the subagent total. All four models always show, even at `n0/c0`, so the line doesn't shift position turn to turn.
+5. The result renders as, per model: `F n<new>/c<cache>`. All four models always show, even at `n0/c0`, so the line doesn't shift position turn to turn.
 
 ---
 
@@ -238,7 +237,7 @@ If Anthropic changes Fable 5's pricing, update the five constants in the `jq` fo
 | `🪄 —` always | Transcript path empty or no `Skill` tool calls yet this session |
 | `📖` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check `~/.claude/.credentials.json` exists and `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `$X.XX` always shows `$0.00` | Correct if Fable wasn't used this session. If Fable *was* used: check `transcript_path` is non-empty and readable, and wait ~15s for the first background refresh; see [Fable-only session cost](#fable-only-session-cost) |
-| Line 3 (`F n.../c...`) never appears, or all-zero | First run always shows nothing (cache not populated yet) — wait ~20s. If still all-zero, check `<transcript_dir>/<session_id>/subagents/` actually exists for sessions that used subagents; see [Per-model token breakdown](#per-model-token-breakdown) |
+| Line 3 (`F n.../c...`) never appears, or all-zero | First run always shows nothing (cache not populated yet) — wait ~20s. If still all-zero for a model you know you used, check `transcript_path` is readable; see [Per-model token breakdown](#per-model-token-breakdown) |
 | Width detection wrong | Set `CLAUDE_STATUSLINE_COLS` to override |
 
 ---

@@ -216,22 +216,24 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
   fi
 fi
 
-# --- Per-model token breakdown: main loop vs subagents (cached, refreshed async) ---
-# Replaces the optional feeds line. Sums input+output+cache tokens per model
-# family (Fable/Opus/Sonnet/Haiku, matched by substring in message.model),
-# split into "main loop" (transcript_path itself) vs "subagents" (every
-# agent-*.jsonl under <transcript_dir>/<session_id>/subagents/, one file per
-# spawned subagent — this is where Task/Agent-tool subagent turns are logged,
-# separately from the main transcript). Same dedup-by-message.id rationale as
-# the Fable-only cost block above: each turn can appear 2-3x per file.
-# "New" tokens = input + output + cache_creation (freshly processed this turn).
+# --- Per-model token breakdown (cached, refreshed async) ---
+# Replaces the optional feeds line. Sums tokens per model family (Fable/Opus/
+# Sonnet/Haiku, matched by substring in message.model) across the whole
+# session — both the main transcript (transcript_path) and every agent-*.jsonl
+# under <transcript_dir>/<session_id>/subagents/ (where Task/Agent-tool
+# subagent turns are logged separately from the main transcript). Main-loop
+# and subagent usage are combined: a token costs the same either way, so
+# there's no reason to split them here (unlike the $ cost segment above,
+# where the split matters because subagents often run on a different,
+# subscription-included model). Same dedup-by-message.id rationale as the
+# Fable-only cost block: each turn can appear 2-3x per file.
+#
+# "New" tokens = input + output + cache_creation (freshly processed).
 # "Cache" tokens = cache_read (context re-read from cache at a 90% discount) —
 # kept separate because in a long session this can dwarf the new-token count
-# (e.g. re-reading a 100k-token context on every one of 40 turns) and summing
-# it into a single "tokens used" figure looks wildly inflated.
-#
-# Per model family, per scope (main loop / subagents), 2 numbers: new, cache.
-# Format: F n<new>/c<cache> ↳n<new>/c<cache> — the part after ↳ is subagents.
+# (e.g. re-reading a 100k-token context on every one of 40 turns), so folding
+# it into one "tokens used" figure looks wildly inflated.
+# Format: F n<new>/c<cache> │ O n<new>/c<cache> │ S ... │ H ...
 model_tokens_line=""
 if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
   mtok_cache_dir="$HOME/.claude/cache"
@@ -239,23 +241,19 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
   mtok_lock_dir="$mtok_cache_dir/fable-model-tokens-${session_id}.lock"
   mtok_ttl=20
 
-  # Cache line layout: 8 fields per scope × 2 scopes = 16 numbers, in the
-  # order: main(f_new f_cache o_new o_cache s_new s_cache h_new h_cache)
-  # then the same 8 fields again for subagents.
+  # Cache line layout: 8 numbers — fn fc on oc sn sc hn hc
   if [ -f "$mtok_cache_file" ]; then
-    IFS=' ' read -r m_fn m_fc m_on m_oc m_sn m_sc m_hn m_hc \
-                    s_fn s_fc s_on s_oc s_sn s_sc s_hn s_hc < "$mtok_cache_file" 2>/dev/null
+    IFS=' ' read -r c_fn c_fc c_on c_oc c_sn c_sc c_hn c_hc < "$mtok_cache_file" 2>/dev/null
     valid=1
-    for v in "$m_fn" "$m_fc" "$m_on" "$m_oc" "$m_sn" "$m_sc" "$m_hn" "$m_hc" \
-             "$s_fn" "$s_fc" "$s_on" "$s_oc" "$s_sn" "$s_sc" "$s_hn" "$s_hc"; do
+    for v in "$c_fn" "$c_fc" "$c_on" "$c_oc" "$c_sn" "$c_sc" "$c_hn" "$c_hc"; do
       case "$v" in ''|*[!0-9]*) valid=0 ;; esac
     done
     if [ "$valid" = "1" ]; then
-      model_tokens_line=$(printf 'F n%s/c%s ↳n%s/c%s │ O n%s/c%s ↳n%s/c%s │ S n%s/c%s ↳n%s/c%s │ H n%s/c%s ↳n%s/c%s' \
-        "$(fmt_tok "$m_fn")" "$(fmt_tok "$m_fc")" "$(fmt_tok "$s_fn")" "$(fmt_tok "$s_fc")" \
-        "$(fmt_tok "$m_on")" "$(fmt_tok "$m_oc")" "$(fmt_tok "$s_on")" "$(fmt_tok "$s_oc")" \
-        "$(fmt_tok "$m_sn")" "$(fmt_tok "$m_sc")" "$(fmt_tok "$s_sn")" "$(fmt_tok "$s_sc")" \
-        "$(fmt_tok "$m_hn")" "$(fmt_tok "$m_hc")" "$(fmt_tok "$s_hn")" "$(fmt_tok "$s_hc")")
+      model_tokens_line=$(printf 'F n%s/c%s │ O n%s/c%s │ S n%s/c%s │ H n%s/c%s' \
+        "$(fmt_tok "$c_fn")" "$(fmt_tok "$c_fc")" \
+        "$(fmt_tok "$c_on")" "$(fmt_tok "$c_oc")" \
+        "$(fmt_tok "$c_sn")" "$(fmt_tok "$c_sc")" \
+        "$(fmt_tok "$c_hn")" "$(fmt_tok "$c_hc")")
     fi
   fi
 
@@ -297,12 +295,11 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
       is_digits() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 
-      read -r mfn mfc mon moc msn msc mhn mhc < <("$JQ" -r "$per_model_jq" "$transcript_path" 2>/dev/null)
-      for v in mfn mfc mon moc msn msc mhn mhc; do
+      read -r fn fc on oc sn sc hn hc < <("$JQ" -r "$per_model_jq" "$transcript_path" 2>/dev/null)
+      for v in fn fc on oc sn sc hn hc; do
         is_digits "${!v}" || eval "$v=0"
       done
 
-      sfn=0; sfc=0; son=0; soc=0; ssn=0; ssc=0; shn=0; shc=0
       transcript_dir="$(dirname "$transcript_path")"
       transcript_stem="$(basename "$transcript_path" .jsonl)"
       subagents_dir="$transcript_dir/$transcript_stem/subagents"
@@ -315,17 +312,15 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
             is_digits "${!v}" || skip=1
           done
           [ "$skip" = "1" ] && continue
-          sfn=$(( sfn + afn )); sfc=$(( sfc + afc ))
-          son=$(( son + aon )); soc=$(( soc + aoc ))
-          ssn=$(( ssn + asn )); ssc=$(( ssc + asc ))
-          shn=$(( shn + ahn )); shc=$(( shc + ahc ))
+          fn=$(( fn + afn )); fc=$(( fc + afc ))
+          on=$(( on + aon )); oc=$(( oc + aoc ))
+          sn=$(( sn + asn )); sc=$(( sc + asc ))
+          hn=$(( hn + ahn )); hc=$(( hc + ahc ))
         done
       fi
 
       tmp_file="${mtok_cache_file}.tmp.$$"
-      printf '%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n' \
-        "$mfn" "$mfc" "$mon" "$moc" "$msn" "$msc" "$mhn" "$mhc" \
-        "$sfn" "$sfc" "$son" "$soc" "$ssn" "$ssc" "$shn" "$shc" > "$tmp_file" 2>/dev/null
+      printf '%s %s %s %s %s %s %s %s\n' "$fn" "$fc" "$on" "$oc" "$sn" "$sc" "$hn" "$hc" > "$tmp_file" 2>/dev/null
       mv -f "$tmp_file" "$mtok_cache_file" 2>/dev/null
     ) >/dev/null 2>&1 &
     disown 2>/dev/null || true
