@@ -3,8 +3,8 @@
 # A 2-line rich statusLine for Claude Code (https://claude.com/claude-code).
 #
 # Line 1: [model] 📁 dir | 🌿 git-branch | 🪄 last-skill
-# Line 2: 🤖▓▓▓░░ 42% │ 📅▓░░░░ 18% │ 📖▓░░░░ 17% │ +120 -33 │ ●3 ✓2/5 │ $0.42 ⏱12m05s
-# Line 3: (optional) per-model token usage, main loop vs subagents — F 4.8M/0 │ O 0/0 │ S 18.8M/521.9k │ H 0/0
+# Line 2: 🤖██░░░ 42% │ ⏳█▍░░░ 30% │ 📅▊░░░░ 18% │ 📖███▋░ 75% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
+# Line 3: (optional) per-model token usage — F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c51.6M │ H n0/c0  │  M99.0%/S0.9%
 #
 # Designed to be invoked from settings.json:
 #   "statusLine": { "type": "command", "command": "bash <path>/statusline.sh" }
@@ -20,7 +20,7 @@ RED='\033[31m'
 DIM='\033[2m'
 RESET=$'\033[0m'
 
-# --- Smooth 8th-block bar (10-char wide, 80 sub-units) ---
+# --- Smooth 8th-block bar (5-char wide, 40 sub-units) ---
 # Usage: make_bar <pct> [yellow_th] [red_th]
 make_bar() {
   local pct="${1:-0}"
@@ -40,14 +40,14 @@ make_bar() {
     color="$GREEN"
   fi
 
-  # 10 chars * 8 sub-units = 80 total steps
-  local units=$(( pct_int * 80 / 100 ))
-  [ "$units" -gt 80 ] && units=80
+  # 5 chars * 8 sub-units = 40 total steps
+  local units=$(( pct_int * 40 / 100 ))
+  [ "$units" -gt 40 ] && units=40
   local full=$(( units / 8 ))
   local remainder=$(( units % 8 ))
   local partial_used=0
   [ "$remainder" -gt 0 ] && partial_used=1
-  local empty=$(( 10 - full - partial_used ))
+  local empty=$(( 5 - full - partial_used ))
 
   # 1/8 .. 7/8 partials (left-aligned eighth blocks)
   local partials=(" " "▏" "▎" "▍" "▌" "▋" "▊" "▉")
@@ -83,6 +83,7 @@ transcript_path=$(echo "$input" | "$JQ" -r '.transcript_path // ""')
 session_id=$(echo "$input" | "$JQ" -r '.session_id // ""')
 ctx_used=$(echo "$input" | "$JQ" -r '.context_window.used_percentage // "null"')
 seven_day_pct=$(echo "$input" | "$JQ" -r '.rate_limits.seven_day.used_percentage // "null"')
+five_hour_pct=$(echo "$input" | "$JQ" -r '.rate_limits.five_hour.used_percentage // "null"')
 total_duration_ms=$(echo "$input" | "$JQ" -r '.cost.total_duration_ms // "null"')
 lines_added=$(echo "$input" | "$JQ" -r '.cost.total_lines_added // 0')
 lines_removed=$(echo "$input" | "$JQ" -r '.cost.total_lines_removed // 0')
@@ -509,18 +510,26 @@ if [ "$ctx_used" != "null" ]; then
   ctx_seg=$(printf "🤖%b %s%%" "$ctx_bar" "$ctx_pct_int")
 fi
 
-# 7-day rate (yellow 70, red 90)
+# 5-hour session rate limit (yellow 70, red 90 — same defaults as 7-day)
+five_seg=""
+if [ "$five_hour_pct" != "null" ]; then
+  five_bar=$(make_bar "$five_hour_pct")
+  five_pct_int=$(printf "%.0f" "$five_hour_pct")
+  five_seg=$(printf "⏳%b %s%%" "$five_bar" "$five_pct_int")
+fi
+
+# 7-day rate (green ≤50, yellow ≤75, red ≥76)
 seven_seg=""
 if [ "$seven_day_pct" != "null" ]; then
-  seven_bar=$(make_bar "$seven_day_pct")
+  seven_bar=$(make_bar "$seven_day_pct" 51 76)
   seven_pct_int=$(printf "%.0f" "$seven_day_pct")
   seven_seg=$(printf "📅%b %s%%" "$seven_bar" "$seven_pct_int")
 fi
 
-# Fable weekly rate (yellow 70, red 90)
+# Fable weekly rate (green ≤50, yellow ≤75, red ≥76)
 fable_seg=""
 if [ -n "$fable_weekly_pct" ]; then
-  fable_bar=$(make_bar "$fable_weekly_pct")
+  fable_bar=$(make_bar "$fable_weekly_pct" 51 76)
   fable_seg=$(printf "📖 %b %s%%" "$fable_bar" "$fable_weekly_pct")
 fi
 
@@ -567,6 +576,7 @@ fi
 # Metrics sections (always one line)
 metrics=()
 [ -n "$ctx_seg" ]      && metrics+=("$ctx_seg")
+[ -n "$five_seg" ]     && metrics+=("$five_seg")
 [ -n "$seven_seg" ]    && metrics+=("$seven_seg")
 [ -n "$fable_seg" ]    && metrics+=("$fable_seg")
 [ -n "$lines_seg" ]    && metrics+=("$lines_seg")

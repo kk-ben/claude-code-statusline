@@ -4,7 +4,7 @@ A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with 
 
 ```
 [Opus 4.7] 📁 …/cc-statusline | 🌿 main | 🪄 superpowers:brainstorming
-🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ 📖 █▋░░░░░░░░ 17% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
+🤖██░░░ 42% │ ⏳█▍░░░ 30% │ 📅▊░░░░ 18% │ 📖███▋░ 75% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
 F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c51.6M │ H n0/c0  │  M99.0%/S0.9%
 ```
 
@@ -21,8 +21,9 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 | `🌿 git-branch` | current branch via `git branch --show-current` (`—` if not a repo) |
 | `🪄 last-skill` | most recent `Skill` tool call from the session transcript |
 | `🤖 ctx-bar` | context window % with smooth 8th-block bar (yellow ≥50, red ≥60) |
-| `📅 7d-bar` | 7-day rate limit % (yellow ≥70, red ≥90) |
-| `📖 Fable-bar` | Fable 5 weekly usage % (yellow ≥70, red ≥90) — fetched separately from `/api/oauth/usage` and cached, since it isn't in the stdin payload; see [Fable weekly gauge](#fable-weekly-gauge) |
+| `⏳ 5h-bar` | 5-hour session rate limit % (yellow ≥70, red ≥90) |
+| `📅 7d-bar` | 7-day rate limit % (green ≤50, yellow ≤75, red ≥76) |
+| `📖 Fable-bar` | Fable 5 weekly usage % (green ≤50, yellow ≤75, red ≥76) — fetched separately from `/api/oauth/usage` and cached, since it isn't in the stdin payload; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `+N -M` | lines added / removed in this session |
 | `●N` / `✓` | git dirty file count, or green check if clean |
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
@@ -112,12 +113,13 @@ Line 3 answers "how much did each model actually do this session, and how much o
 
 ### Color thresholds
 
-Edit `make_bar` calls in `statusline.sh`:
+Edit `make_bar` calls in `statusline.sh`. Signature is `make_bar <pct> [yellow_th=70] [red_th=90]`; bars are 5 characters wide.
 
 ```bash
-ctx_bar=$(make_bar "$ctx_used" 50 60)        # context: yellow ≥50, red ≥60
-seven_bar=$(make_bar "$seven_day_pct")       # 7d rate: yellow ≥70 (default), red ≥90 (default)
-fable_bar=$(make_bar "$fable_weekly_pct")    # Fable weekly: yellow ≥70 (default), red ≥90 (default)
+ctx_bar=$(make_bar "$ctx_used" 50 60)          # context: yellow ≥50, red ≥60
+five_bar=$(make_bar "$five_hour_pct")          # 5h rate: yellow ≥70 (default), red ≥90 (default)
+seven_bar=$(make_bar "$seven_day_pct" 51 76)   # 7d rate: yellow ≥51, red ≥76 (green ≤50)
+fable_bar=$(make_bar "$fable_weekly_pct" 51 76) # Fable weekly: yellow ≥51, red ≥76 (green ≤50)
 ```
 
 ### Line-1 width truncation
@@ -159,7 +161,7 @@ Claude Code invokes the statusLine command on every UI tick, piping a JSON paylo
   "transcript_path": "/abs/path/to/transcript.jsonl",
   "session_id":     "uuid",
   "context_window": { "used_percentage": 42 },
-  "rate_limits":    { "seven_day": { "used_percentage": 18 } },
+  "rate_limits":    { "five_hour": { "used_percentage": 30 }, "seven_day": { "used_percentage": 18 } },
   "cost": {
     "total_cost_usd":      0.42,
     "total_duration_ms":   725000,
