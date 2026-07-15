@@ -5,10 +5,10 @@ A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with 
 ```
 [Opus 4.7] 📁 …/cc-statusline | 🌿 main | 🪄 superpowers:brainstorming
 🤖████▌░░░░░ 42% │ 📅█▊░░░░░░░ 18% │ 📖 █▋░░░░░░░░ 17% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
-F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c43.7M │ H n0/c0
+F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c51.6M │ H n0/c0  │  M99.0%/S0.9%
 ```
 
-The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many tokens were newly processed (`n`) vs read from prompt cache (`c`) this session — combined across the main loop and any subagents (a token costs the same either way). See [Per-model token breakdown](#per-model-token-breakdown).
+The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many tokens were newly processed (`n`) vs read from prompt cache (`c`) this session — combined across the main loop and any subagents, since a token costs the same either way. The trailing `M99.0%/S0.9%` is a separate figure: of *all* tokens combined, what share ran in the main loop vs subagents. See [Per-model token breakdown](#per-model-token-breakdown).
 
 ---
 
@@ -28,6 +28,7 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
 | `$X.XX ⏱H:MMmSSs` | Fable-5-only cost this session (not the blended stdin total — see [Fable-only session cost](#fable-only-session-cost)) and total duration |
 | `F n../c.. │ O n../c.. │ S ... │ H ...` (line 3) | Per model family (Fable/Opus/Sonnet/Haiku), new-vs-cached tokens this session (main loop + subagents combined) — `n`=input+output+cache-write, `c`=cache-read — see [Per-model token breakdown](#per-model-token-breakdown) |
+| `M../S..%` (line 3, trailing) | Of all tokens combined (every model, new+cache), the percentage that ran in the main loop vs subagents — model-agnostic, a separate axis from the `n`/`c` breakdown |
 
 ---
 
@@ -88,7 +89,7 @@ The `feeds/*` scripts from earlier versions still exist in this repo but are no 
 
 Line 3 answers "how much did each model actually do this session, and how much of that was fresh work vs re-reading cached context?" — split by model family only, not by main-loop vs subagent (a token costs the same regardless of which one processed it — that distinction only matters for the [$ cost segment](#fable-only-session-cost), where subagents commonly run on a different, subscription-included model).
 
-1. On each invocation, the script reads `~/.claude/cache/fable-model-tokens-<session_id>.txt` (8 cached integers) if present — no transcript parsing on the hot path.
+1. On each invocation, the script reads `~/.claude/cache/fable-model-tokens-<session_id>.txt` (10 cached integers) if present — no transcript parsing on the hot path.
 2. If that cache is missing or older than 20s, a background subshell refreshes it, same non-blocking pattern as the gauges above.
 3. The refresher computes two numbers per model family, combining the main transcript (`transcript_path`) with every `agent-*.jsonl` under `<transcript_dir>/<session_id>/subagents/` (that's where Claude Code logs each Task/Agent-tool-spawned subagent's own turns, separately from the main transcript). Each file is deduped by `message.id` independently before summing (same duplicate-turn issue as the Fable-only cost block — a turn can appear 2-3x per file as content blocks stream in), then the per-file sums are added together:
    - **`n` (new)** — `input_tokens + output_tokens + cache_creation_input_tokens`: tokens freshly processed or newly written to cache this turn.
@@ -97,6 +98,7 @@ Line 3 answers "how much did each model actually do this session, and how much o
    These are kept separate because summing them into one "tokens used" figure is misleading in a long session: re-reading a large accumulated context on every turn (`c`) can dwarf the actual new content (`n`) by 10-20x, making token usage look far higher than the work actually done.
 4. **Model family** is matched by substring in `message.model` (`fable`, `opus`, `sonnet`, `haiku` — case-insensitive), so it covers any dated/variant model id (`claude-fable-5`, `claude-opus-4-8`, etc.) without needing exact version strings.
 5. The result renders as, per model: `F n<new>/c<cache>`. All four models always show, even at `n0/c0`, so the line doesn't shift position turn to turn.
+6. **Trailing `M../S..%`** — while summing per model, the refresher also keeps two running totals: every token (new+cache, all four models) from the main transcript, and the same from every subagent file. It caches both alongside the per-model numbers, and the render step divides them into a main-vs-subagent percentage (one decimal place, plain integer math — no `bc`/`awk`). This is a completely separate split from the `n`/`c` breakdown: it doesn't care which model did the work, only whether it ran in the main loop or a subagent, so it stays meaningful no matter which model is currently set as the main-loop model.
 
 ---
 

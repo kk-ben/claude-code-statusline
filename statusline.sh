@@ -233,7 +233,11 @@ fi
 # kept separate because in a long session this can dwarf the new-token count
 # (e.g. re-reading a 100k-token context on every one of 40 turns), so folding
 # it into one "tokens used" figure looks wildly inflated.
-# Format: F n<new>/c<cache> │ O n<new>/c<cache> │ S ... │ H ...
+# Format: F n<new>/c<cache> │ O n<new>/c<cache> │ S ... │ H ...  │  M<pct>%/S<pct>%
+# The trailing M/S segment is the overall main-loop-vs-subagent split of all
+# tokens combined (all models, new+cache) — a separate axis from the n/c
+# breakdown above, and deliberately not crossed with it (see the
+# "Per-model token breakdown" section in README for why).
 model_tokens_line=""
 if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
   mtok_cache_dir="$HOME/.claude/cache"
@@ -241,11 +245,11 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
   mtok_lock_dir="$mtok_cache_dir/fable-model-tokens-${session_id}.lock"
   mtok_ttl=20
 
-  # Cache line layout: 8 numbers — fn fc on oc sn sc hn hc
+  # Cache line layout: 10 numbers — fn fc on oc sn sc hn hc main_total sub_total
   if [ -f "$mtok_cache_file" ]; then
-    IFS=' ' read -r c_fn c_fc c_on c_oc c_sn c_sc c_hn c_hc < "$mtok_cache_file" 2>/dev/null
+    IFS=' ' read -r c_fn c_fc c_on c_oc c_sn c_sc c_hn c_hc c_main c_sub < "$mtok_cache_file" 2>/dev/null
     valid=1
-    for v in "$c_fn" "$c_fc" "$c_on" "$c_oc" "$c_sn" "$c_sc" "$c_hn" "$c_hc"; do
+    for v in "$c_fn" "$c_fc" "$c_on" "$c_oc" "$c_sn" "$c_sc" "$c_hn" "$c_hc" "$c_main" "$c_sub"; do
       case "$v" in ''|*[!0-9]*) valid=0 ;; esac
     done
     if [ "$valid" = "1" ]; then
@@ -254,6 +258,15 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
         "$(fmt_tok "$c_on")" "$(fmt_tok "$c_oc")" \
         "$(fmt_tok "$c_sn")" "$(fmt_tok "$c_sc")" \
         "$(fmt_tok "$c_hn")" "$(fmt_tok "$c_hc")")
+      grand=$(( c_main + c_sub ))
+      if [ "$grand" -gt 0 ]; then
+        main_tenths=$(( c_main * 1000 / grand ))
+        sub_tenths=$(( c_sub * 1000 / grand ))
+        ms_seg=$(printf '  │  M%d.%d%%/S%d.%d%%' \
+          $(( main_tenths / 10 )) $(( main_tenths % 10 )) \
+          $(( sub_tenths / 10 )) $(( sub_tenths % 10 )))
+        model_tokens_line="${model_tokens_line}${ms_seg}"
+      fi
     fi
   fi
 
@@ -299,7 +312,9 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
       for v in fn fc on oc sn sc hn hc; do
         is_digits "${!v}" || eval "$v=0"
       done
+      main_total=$(( fn + fc + on + oc + sn + sc + hn + hc ))
 
+      sub_total=0
       transcript_dir="$(dirname "$transcript_path")"
       transcript_stem="$(basename "$transcript_path" .jsonl)"
       subagents_dir="$transcript_dir/$transcript_stem/subagents"
@@ -312,6 +327,7 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
             is_digits "${!v}" || skip=1
           done
           [ "$skip" = "1" ] && continue
+          sub_total=$(( sub_total + afn + afc + aon + aoc + asn + asc + ahn + ahc ))
           fn=$(( fn + afn )); fc=$(( fc + afc ))
           on=$(( on + aon )); oc=$(( oc + aoc ))
           sn=$(( sn + asn )); sc=$(( sc + asc ))
@@ -320,7 +336,8 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
       fi
 
       tmp_file="${mtok_cache_file}.tmp.$$"
-      printf '%s %s %s %s %s %s %s %s\n' "$fn" "$fc" "$on" "$oc" "$sn" "$sc" "$hn" "$hc" > "$tmp_file" 2>/dev/null
+      printf '%s %s %s %s %s %s %s %s %s %s\n' \
+        "$fn" "$fc" "$on" "$oc" "$sn" "$sc" "$hn" "$hc" "$main_total" "$sub_total" > "$tmp_file" 2>/dev/null
       mv -f "$tmp_file" "$mtok_cache_file" 2>/dev/null
     ) >/dev/null 2>&1 &
     disown 2>/dev/null || true
