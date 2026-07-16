@@ -186,7 +186,7 @@ Claude Code's stdin payload only exposes `rate_limits.seven_day` (the overall we
 
 1. On each invocation, the script reads `~/.claude/cache/fable-weekly.txt` (a single integer, 0–100) if present and renders the gauge from it immediately — no network call on the hot path.
 2. If that cache is missing or older than 300s, a background subshell is forked (`( ... ) & disown`) to refresh it; the visible statusLine for *this* tick is never blocked on the network.
-3. The refresher reads the OAuth access token from `~/.claude/.credentials.json` (`.claudeAiOauth.accessToken`), calls:
+3. The refresher reads the OAuth access token from `~/.claude/.credentials.json` (`.claudeAiOauth.accessToken`). If that file doesn't exist — GUI installs of Claude Code on macOS keep the same JSON payload in the login Keychain instead — it falls back to `security find-generic-password -s "Claude Code-credentials" -w`. The first Keychain read pops a one-time macOS permission dialog; click **Always Allow**. It then calls:
    ```bash
    curl -s --max-time 5 \
      -H "Authorization: Bearer $token" \
@@ -240,7 +240,7 @@ If Anthropic changes Fable 5's pricing, update the five constants in the `jq` fo
 | Statusline doesn't appear | settings.json `statusLine.command` path wrong → check `bash <that path>` works in a shell |
 | Bars never colored / always green | `ctx_used` and `seven_day_pct` are `null` in stdin — your Claude Code may be older; the script just hides those segments |
 | `🪄 —` always | Transcript path empty or no `Skill` tool calls yet this session |
-| `📖` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check `~/.claude/.credentials.json` exists and `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
+| `📖` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check that either `~/.claude/.credentials.json` exists or the `Claude Code-credentials` Keychain item is readable (approve the one-time **Always Allow** dialog), and that `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `$X.XX` always shows `$0.00` | Correct if Fable wasn't used this session. If Fable *was* used: check `transcript_path` is non-empty and readable, and wait ~15s for the first background refresh; see [Fable-only session cost](#fable-only-session-cost) |
 | Line 3 (`F n.../c...`) never appears, or all-zero | First run always shows nothing (cache not populated yet) — wait ~20s. If still all-zero for a model you know you used, check `transcript_path` is readable; see [Per-model token breakdown](#per-model-token-breakdown) |
 | Width detection wrong | Set `CLAUDE_STATUSLINE_COLS` to override |

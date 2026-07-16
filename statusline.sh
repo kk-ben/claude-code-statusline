@@ -125,8 +125,16 @@ if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
     trap 'rmdir "$fable_lock_dir" 2>/dev/null' EXIT
     mkdir -p "$fable_cache_dir" 2>/dev/null
     creds_file="$HOME/.claude/.credentials.json"
-    [ -f "$creds_file" ] || exit 0
-    token=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+    token=""
+    if [ -f "$creds_file" ]; then
+      token=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+    fi
+    # GUI installs of Claude Code on macOS store OAuth in the login Keychain
+    # instead of .credentials.json — same JSON payload, different location
+    if [ -z "$token" ] && [ "$(uname)" = "Darwin" ]; then
+      token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
+        | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+    fi
     [ -n "$token" ] || exit 0
     resp=$(curl -s --max-time 5 \
       -H "Authorization: Bearer $token" \
