@@ -98,8 +98,13 @@ fable_cache_ttl=300
 fable_weekly_pct=""
 if [ -f "$fable_cache_file" ]; then
   cached_val=$(cat "$fable_cache_file" 2>/dev/null | tr -d '[:space:]')
-  if [ -n "$cached_val" ] && [ "$cached_val" -eq "$cached_val" ] 2>/dev/null; then
-    fable_weekly_pct="$cached_val"
+  # cached_val may be an integer or a decimal (the oauth/usage API has been
+  # observed returning fractional percent values), so round via printf
+  # rather than a strict digit-only equality check (same pattern used below
+  # for ctx_used / five_hour_pct / seven_day_pct).
+  if [ -n "$cached_val" ]; then
+    rounded_val=$(printf "%.0f" "$cached_val" 2>/dev/null)
+    [ -n "$rounded_val" ] && fable_weekly_pct="$rounded_val"
   fi
 fi
 
@@ -144,6 +149,10 @@ if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
     [ -n "$resp" ] || exit 0
     pct=$(echo "$resp" | "$JQ" -r '.limits[]? | select(.kind=="weekly_scoped" and .scope.model.display_name=="Fable") | .percent' 2>/dev/null | head -n 1)
     [ -n "$pct" ] || exit 0
+    # percent can be an integer or a decimal (API has been observed returning
+    # fractional values) — round it here so the cache always holds a plain
+    # integer that the strict digit check on the reader side can accept.
+    pct=$(printf "%.0f" "$pct" 2>/dev/null)
     case "$pct" in
       ''|*[!0-9]*) exit 0 ;;
     esac
