@@ -14,6 +14,11 @@
 
 input=$(cat)
 
+# --- File mtime (epoch seconds). GNU stat takes -c; on macOS -c is an illegal
+# option (prints nothing, non-zero) so it falls through to BSD -f. Order matters:
+# on GNU, `stat -f` means "filesystem status" and would print garbage. ---
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+
 # --- ANSI colors ---
 GREEN='\033[32m'
 YELLOW='\033[33m'
@@ -123,7 +128,7 @@ fi
 fable_now=$(date +%s)
 fable_stale_mark=""
 if [ -f "$fable_cache_file" ]; then
-  fable_mtime=$(stat -f %m "$fable_cache_file" 2>/dev/null || stat -c %Y "$fable_cache_file" 2>/dev/null)
+  fable_mtime=$(file_mtime "$fable_cache_file")
   if [ -n "$fable_mtime" ] && [ $(( fable_now - fable_mtime )) -ge "$fable_stale_after" ] 2>/dev/null; then
     fable_stale_mark="?"
   fi
@@ -131,7 +136,7 @@ fi
 
 fable_try_age=999999
 if [ -f "$fable_try_file" ]; then
-  fable_try_mtime=$(stat -f %m "$fable_try_file" 2>/dev/null || stat -c %Y "$fable_try_file" 2>/dev/null)
+  fable_try_mtime=$(file_mtime "$fable_try_file")
   [ -n "$fable_try_mtime" ] && fable_try_age=$(( fable_now - fable_try_mtime ))
 fi
 
@@ -139,7 +144,7 @@ if [ "$fable_try_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
   mkdir -p "$fable_cache_dir" 2>/dev/null
   # Clear a stale lock (fetcher killed mid-flight) so refresh can't wedge forever
   if [ -d "$fable_lock_dir" ]; then
-    lock_mtime=$(stat -f %m "$fable_lock_dir" 2>/dev/null || stat -c %Y "$fable_lock_dir" 2>/dev/null)
+    lock_mtime=$(file_mtime "$fable_lock_dir")
     if [ -n "$lock_mtime" ] && [ $(( $(date +%s) - lock_mtime )) -gt 60 ]; then
       rmdir "$fable_lock_dir" 2>/dev/null
     fi
@@ -213,13 +218,13 @@ fi
 
 acct_age=999999
 if [ -f "$acct_cache_file" ]; then
-  acct_mtime=$(stat -f %m "$acct_cache_file" 2>/dev/null || stat -c %Y "$acct_cache_file" 2>/dev/null)
+  acct_mtime=$(file_mtime "$acct_cache_file")
   [ -n "$acct_mtime" ] && acct_age=$(( $(date +%s) - acct_mtime ))
 fi
 
 if [ "$acct_age" -ge "$acct_ttl" ] 2>/dev/null; then
   if [ -d "$acct_lock_dir" ]; then
-    acct_lock_mtime=$(stat -f %m "$acct_lock_dir" 2>/dev/null || stat -c %Y "$acct_lock_dir" 2>/dev/null)
+    acct_lock_mtime=$(file_mtime "$acct_lock_dir")
     if [ -n "$acct_lock_mtime" ] && [ $(( $(date +%s) - acct_lock_mtime )) -gt 30 ]; then
       rmdir "$acct_lock_dir" 2>/dev/null
     fi
@@ -278,7 +283,7 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
   fcost_age=999999
   if [ -f "$fcost_cache_file" ]; then
-    fcost_mtime=$(stat -f %m "$fcost_cache_file" 2>/dev/null || stat -c %Y "$fcost_cache_file" 2>/dev/null)
+    fcost_mtime=$(file_mtime "$fcost_cache_file")
     if [ -n "$fcost_mtime" ]; then
       fcost_age=$(( $(date +%s) - fcost_mtime ))
     fi
@@ -286,7 +291,7 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
   if [ "$fcost_age" -ge "$fcost_ttl" ] 2>/dev/null; then
     if [ -d "$fcost_lock_dir" ]; then
-      fcost_lock_mtime=$(stat -f %m "$fcost_lock_dir" 2>/dev/null || stat -c %Y "$fcost_lock_dir" 2>/dev/null)
+      fcost_lock_mtime=$(file_mtime "$fcost_lock_dir")
       if [ -n "$fcost_lock_mtime" ] && [ $(( $(date +%s) - fcost_lock_mtime )) -gt 30 ]; then
         rmdir "$fcost_lock_dir" 2>/dev/null
       fi
@@ -385,7 +390,7 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
   mtok_age=999999
   if [ -f "$mtok_cache_file" ]; then
-    mtok_mtime=$(stat -f %m "$mtok_cache_file" 2>/dev/null || stat -c %Y "$mtok_cache_file" 2>/dev/null)
+    mtok_mtime=$(file_mtime "$mtok_cache_file")
     if [ -n "$mtok_mtime" ]; then
       mtok_age=$(( $(date +%s) - mtok_mtime ))
     fi
@@ -393,7 +398,7 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
   if [ "$mtok_age" -ge "$mtok_ttl" ] 2>/dev/null; then
     if [ -d "$mtok_lock_dir" ]; then
-      mtok_lock_mtime=$(stat -f %m "$mtok_lock_dir" 2>/dev/null || stat -c %Y "$mtok_lock_dir" 2>/dev/null)
+      mtok_lock_mtime=$(file_mtime "$mtok_lock_dir")
       if [ -n "$mtok_lock_mtime" ] && [ $(( $(date +%s) - mtok_lock_mtime )) -gt 30 ]; then
         rmdir "$mtok_lock_dir" 2>/dev/null
       fi
@@ -536,13 +541,13 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
   skill_age=999999
   if [ -f "$skill_cache_file" ]; then
-    skill_mtime=$(stat -f %m "$skill_cache_file" 2>/dev/null || stat -c %Y "$skill_cache_file" 2>/dev/null)
+    skill_mtime=$(file_mtime "$skill_cache_file")
     [ -n "$skill_mtime" ] && skill_age=$(( $(date +%s) - skill_mtime ))
   fi
 
   if [ "$skill_age" -ge "$skill_ttl" ] 2>/dev/null; then
     if [ -d "$skill_lock_dir" ]; then
-      skill_lock_mtime=$(stat -f %m "$skill_lock_dir" 2>/dev/null || stat -c %Y "$skill_lock_dir" 2>/dev/null)
+      skill_lock_mtime=$(file_mtime "$skill_lock_dir")
       if [ -n "$skill_lock_mtime" ] && [ $(( $(date +%s) - skill_lock_mtime )) -gt 30 ]; then
         rmdir "$skill_lock_dir" 2>/dev/null
       fi
@@ -626,13 +631,13 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
 
   ap_age=999999
   if [ -f "$ap_cache_file" ]; then
-    ap_mtime=$(stat -f %m "$ap_cache_file" 2>/dev/null || stat -c %Y "$ap_cache_file" 2>/dev/null)
+    ap_mtime=$(file_mtime "$ap_cache_file")
     [ -n "$ap_mtime" ] && ap_age=$(( $(date +%s) - ap_mtime ))
   fi
 
   if [ "$ap_age" -ge "$ap_ttl" ] 2>/dev/null; then
     if [ -d "$ap_lock_dir" ]; then
-      ap_lock_mtime=$(stat -f %m "$ap_lock_dir" 2>/dev/null || stat -c %Y "$ap_lock_dir" 2>/dev/null)
+      ap_lock_mtime=$(file_mtime "$ap_lock_dir")
       if [ -n "$ap_lock_mtime" ] && [ $(( $(date +%s) - ap_lock_mtime )) -gt 30 ]; then
         rmdir "$ap_lock_dir" 2>/dev/null
       fi

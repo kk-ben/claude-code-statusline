@@ -68,9 +68,12 @@ echo "installed: $INSTALL_DIR/statusline.sh"
 if ! command -v jq >/dev/null 2>&1; then
   echo "warning: jq not found — statusline.sh needs it (brew install jq / apt install jq)" >&2
 fi
-for opt in git curl; do
-  command -v "$opt" >/dev/null 2>&1 || echo "note: $opt not found — the segments that use it are left out" >&2
-done
+if ! command -v git >/dev/null 2>&1; then
+  echo "note: git not found — the branch shows \"—\"" >&2
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "note: curl not found — the Fable weekly gauge is left out" >&2
+fi
 
 # ---------- Feeds install (optional) ----------
 if [ "$WITH_FEEDS" = "1" ]; then
@@ -105,7 +108,7 @@ SNIPPET=$(cat <<JSON
 {
   "statusLine": {
     "type": "command",
-    "command": "bash $INSTALL_DIR/statusline.sh"
+    "command": "bash \"$INSTALL_DIR/statusline.sh\""
   }
 }
 JSON
@@ -118,15 +121,36 @@ if [ "$PATCH_SETTINGS" = "1" ]; then
     echo "$SNIPPET"
     exit 1
   fi
-  if [ -f "$SETTINGS_FILE" ]; then
-    cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
-  else
-    echo '{}' > "$SETTINGS_FILE"
+  settings_dir="$(dirname "$SETTINGS_FILE")"
+  if ! mkdir -p "$settings_dir"; then
+    echo "error: cannot create $settings_dir — settings.json not patched" >&2
+    exit 1
   fi
-  tmp=$(mktemp)
-  jq --arg cmd "bash $INSTALL_DIR/statusline.sh" \
-     '.statusLine = {"type":"command","command":$cmd}' \
-     "$SETTINGS_FILE" > "$tmp" && mv "$tmp" "$SETTINGS_FILE"
+  if [ -f "$SETTINGS_FILE" ]; then
+    if ! cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak.$(date +%Y%m%d_%H%M%S)"; then
+      echo "error: cannot back up $SETTINGS_FILE — settings.json not patched" >&2
+      exit 1
+    fi
+  elif ! echo '{}' > "$SETTINGS_FILE"; then
+    echo "error: cannot create $SETTINGS_FILE — settings.json not patched" >&2
+    exit 1
+  fi
+  if ! tmp=$(mktemp); then
+    echo "error: mktemp failed — $SETTINGS_FILE not patched" >&2
+    exit 1
+  fi
+  if ! jq --arg cmd "bash \"$INSTALL_DIR/statusline.sh\"" \
+       '.statusLine = {"type":"command","command":$cmd}' \
+       "$SETTINGS_FILE" > "$tmp"; then
+    echo "error: jq failed on $SETTINGS_FILE (is it valid JSON?) — left unchanged" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  if ! mv "$tmp" "$SETTINGS_FILE"; then
+    echo "error: could not write $SETTINGS_FILE — left unchanged" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
   echo "patched:   $SETTINGS_FILE (backup written alongside)"
 else
   echo ""

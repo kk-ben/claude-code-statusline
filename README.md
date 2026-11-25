@@ -48,7 +48,7 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 ## Requirements
 
 - **bash** ≥ 3.2 (macOS default works)
-- **jq** ≥ 1.5 — `brew install jq` on macOS, `apt install jq` on Debian/Ubuntu
+- **jq** ≥ 1.6 — `brew install jq` on macOS, `apt install jq` on Debian/Ubuntu
 - **git** (only used inside git repos)
 - **curl** (only for the Fable weekly gauge, which calls the OAuth usage API)
 - standard tools: `awk`, `grep`, `sed`, `stat`, `ps` (BSD and GNU variants both work)
@@ -74,7 +74,7 @@ bash install.sh --patch-settings
 The installer:
 
 1. Copies `statusline.sh` to `$HOME/.claude/cc-statusline/statusline.sh` (override with `INSTALL_DIR=...`)
-2. With `--patch-settings`: rewrites `$HOME/.claude/settings.json` `statusLine` block (a timestamped backup is kept)
+2. With `--patch-settings`: rewrites the `statusLine` block of `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json` (creates the folder if needed; a timestamped backup is kept if the file already exists; on any failure it prints the error to stderr, leaves the file unchanged and exits 1)
 
 > `install.sh` still accepts `--with-feeds` (copies the `feeds/*` scripts and registers macOS LaunchAgents), but `statusline.sh` no longer renders that output — the third line now shows the [per-model token breakdown](#per-model-token-breakdown) instead. The flag is kept only so `--uninstall` can clean up LaunchAgents from older installs.
 
@@ -87,7 +87,7 @@ Restart Claude Code (or open a new session) — the new statusline appears immed
 If you'd rather not run the installer:
 
 1. Copy `statusline.sh` somewhere readable, e.g. `~/.claude/cc-statusline/statusline.sh`, and `chmod +x` it.
-2. Add this to `~/.claude/settings.json`:
+2. Add this to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json` (that is `~/.claude/settings.json` unless `CLAUDE_CONFIG_DIR` is set):
 
    ```json
    {
@@ -151,7 +151,7 @@ Claude Code sets the `COLUMNS` env var to the real statusline width when it runs
 | 90–139 | Strips `(...)` from the model name, collapses dir to `…/basename` |
 | < 90 | Strips `(...)` from the model name, basename-only dir |
 
-Line 2 wraps onto extra lines when it doesn't fit. Lines 3 and 4 never wrap: they drop segments instead (lowest-usage models on line 3, oldest skills on line 4).
+Line 2 wraps onto extra lines when it doesn't fit. Lines 3 and 4 never wrap: they drop segments instead (lowest-usage models on line 3, oldest skills on line 4). At least one model / one skill is always kept, so a single very long item can still exceed the width.
 
 ---
 
