@@ -151,7 +151,7 @@ Claude Code sets the `COLUMNS` env var to the real statusline width when it runs
 | 90–139 | Strips `(...)` from the model name, collapses dir to `…/basename` |
 | < 90 | Strips `(...)` from the model name, basename-only dir |
 
-Line 2 wraps onto extra lines when it doesn't fit. Lines 3 and 4 never wrap: they drop segments instead (lowest-usage models on line 3, oldest skills on line 4). At least one model / one skill is always kept, so a single very long item can still exceed the width.
+Line 2 wraps onto extra lines when it doesn't fit. Lines 3 and 4 never wrap: they drop segments instead. On line 3, models are dropped lowest-usage first (all of them if needed), then the M/S segment; the 👤 account name is never dropped, so line 3 can end up showing only the account name. On line 4, the oldest skills are dropped first; at least one skill is always kept, so a single very long name can still exceed the width.
 
 ---
 

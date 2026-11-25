@@ -59,9 +59,12 @@ if [ "$UNINSTALL" = "1" ]; then
 fi
 
 # ---------- Core install ----------
-mkdir -p "$INSTALL_DIR"
-cp -f "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/statusline.sh"
-chmod +x "$INSTALL_DIR/statusline.sh"
+if ! { mkdir -p "$INSTALL_DIR" \
+       && cp -f "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/statusline.sh" \
+       && chmod +x "$INSTALL_DIR/statusline.sh"; }; then
+  echo "error: could not install to $INSTALL_DIR" >&2
+  exit 1
+fi
 echo "installed: $INSTALL_DIR/statusline.sh"
 
 # ---------- Dependency check (warn only) ----------
