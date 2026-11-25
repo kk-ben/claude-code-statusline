@@ -203,7 +203,10 @@ else
   acct_src="$HOME/.claude.json"
 fi
 acct_cache_dir="$HOME/.claude/cache"
-acct_key="${cfg_dir//[^A-Za-z0-9]/_}"
+# Cache key = checksum of the config dir path (the old "non-alphanumerics -> _"
+# form mapped e.g. /a/b-c and /a/b_c to the same file).
+acct_key=$(printf '%s' "$cfg_dir" | cksum | awk '{print $1}')
+[ -z "$acct_key" ] && acct_key="default"
 acct_cache_file="$acct_cache_dir/account-name-${acct_key}.txt"
 acct_lock_dir="$acct_cache_dir/account-name-${acct_key}.lock"
 acct_ttl=300
@@ -490,7 +493,7 @@ esac
 # --- git branch + dirty count ---
 git_branch="—"
 git_dirty_str=""
-if [ -n "$current_dir" ] && [ -d "$current_dir" ]; then
+if [ -n "$current_dir" ] && [ -d "$current_dir" ] && command -v git >/dev/null 2>&1; then
   git_branch=$(git -C "$current_dir" branch --show-current 2>/dev/null)
   [ -z "$git_branch" ] && git_branch="—"
   dirty_n=$(git -C "$current_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')

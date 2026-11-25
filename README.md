@@ -326,6 +326,14 @@ This opts into Claude Code's alt-screen rendering with virtualized scrollback (d
 
 Once Anthropic resolves the upstream regression, this env var can be removed.
 
+### Lines can overflow by a few columns on narrow terminals
+
+**Symptom**: on a narrow terminal, a line (mostly line 2, or lines 3 and 4 that never wrap) can run a few columns past the right edge.
+
+**Cause**: the width of each segment is measured with `wc -m`, which counts characters. Emoji and full-width characters take 2 columns in a terminal, so the real width is larger than the counted one.
+
+**Workaround**: set `CLAUDE_STATUSLINE_COLS` to a slightly smaller value than your terminal width (see the environment variable table).
+
 ---
 
 ## Repo layout

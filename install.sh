@@ -126,11 +126,13 @@ if [ "$PATCH_SETTINGS" = "1" ]; then
     echo "error: cannot create $settings_dir — settings.json not patched" >&2
     exit 1
   fi
+  backup_note="(new file)"
   if [ -f "$SETTINGS_FILE" ]; then
     if ! cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak.$(date +%Y%m%d_%H%M%S)"; then
       echo "error: cannot back up $SETTINGS_FILE — settings.json not patched" >&2
       exit 1
     fi
+    backup_note="(backup written alongside)"
   elif ! echo '{}' > "$SETTINGS_FILE"; then
     echo "error: cannot create $SETTINGS_FILE — settings.json not patched" >&2
     exit 1
@@ -151,7 +153,7 @@ if [ "$PATCH_SETTINGS" = "1" ]; then
     rm -f "$tmp"
     exit 1
   fi
-  echo "patched:   $SETTINGS_FILE (backup written alongside)"
+  echo "patched:   $SETTINGS_FILE $backup_note"
 else
   echo ""
   echo "----- add this to $SETTINGS_FILE -----"
