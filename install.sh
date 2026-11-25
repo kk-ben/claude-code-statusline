@@ -3,9 +3,11 @@
 #
 # What it does:
 #   1. Copies statusline.sh to $INSTALL_DIR (default: $HOME/.claude/cc-statusline)
-#   2. (--with-feeds) Copies feeds/ scripts and registers macOS LaunchAgents
-#      that refresh the feed cache hourly
-#   3. Patches $HOME/.claude/settings.json to point statusLine at the script
+#      and warns about missing dependencies (jq required; git / curl optional)
+#   2. (--with-feeds, legacy) Copies feeds/ scripts and registers macOS
+#      LaunchAgents. statusline.sh no longer shows the feeds; kept for old installs
+#   3. Patches settings.json (${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json)
+#      to point statusLine at the script
 #      (only if --patch-settings is given; otherwise prints the snippet)
 #
 # Usage:
@@ -20,7 +22,7 @@
 set -uo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.claude/cc-statusline}"
-SETTINGS_FILE="$HOME/.claude/settings.json"
+SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LABEL_PREFIX="${LABEL_PREFIX:-com.${USER}.cc-statusline}"
 
@@ -34,7 +36,7 @@ for arg in "$@"; do
     --patch-settings) PATCH_SETTINGS=1 ;;
     --uninstall)      UNINSTALL=1 ;;
     -h|--help)
-      sed -n '2,20p' "$0"; exit 0 ;;
+      sed -n '2,22p' "$0"; exit 0 ;;
     *)
       echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -57,10 +59,24 @@ if [ "$UNINSTALL" = "1" ]; then
 fi
 
 # ---------- Core install ----------
-mkdir -p "$INSTALL_DIR"
-cp -f "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/statusline.sh"
-chmod +x "$INSTALL_DIR/statusline.sh"
+if ! { mkdir -p "$INSTALL_DIR" \
+       && cp -f "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/statusline.sh" \
+       && chmod +x "$INSTALL_DIR/statusline.sh"; }; then
+  echo "error: could not install to $INSTALL_DIR" >&2
+  exit 1
+fi
 echo "installed: $INSTALL_DIR/statusline.sh"
+
+# ---------- Dependency check (warn only) ----------
+if ! command -v jq >/dev/null 2>&1; then
+  echo "warning: jq not found — statusline.sh needs it (brew install jq / apt install jq)" >&2
+fi
+if ! command -v git >/dev/null 2>&1; then
+  echo "note: git not found — the branch shows \"—\"" >&2
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "note: curl not found — the Fable weekly gauge is left out" >&2
+fi
 
 # ---------- Feeds install (optional) ----------
 if [ "$WITH_FEEDS" = "1" ]; then
@@ -95,7 +111,7 @@ SNIPPET=$(cat <<JSON
 {
   "statusLine": {
     "type": "command",
-    "command": "bash $INSTALL_DIR/statusline.sh"
+    "command": "bash \"$INSTALL_DIR/statusline.sh\""
   }
 }
 JSON
@@ -108,16 +124,39 @@ if [ "$PATCH_SETTINGS" = "1" ]; then
     echo "$SNIPPET"
     exit 1
   fi
-  if [ -f "$SETTINGS_FILE" ]; then
-    cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
-  else
-    echo '{}' > "$SETTINGS_FILE"
+  settings_dir="$(dirname "$SETTINGS_FILE")"
+  if ! mkdir -p "$settings_dir"; then
+    echo "error: cannot create $settings_dir — settings.json not patched" >&2
+    exit 1
   fi
-  tmp=$(mktemp)
-  jq --arg cmd "bash $INSTALL_DIR/statusline.sh" \
-     '.statusLine = {"type":"command","command":$cmd}' \
-     "$SETTINGS_FILE" > "$tmp" && mv "$tmp" "$SETTINGS_FILE"
-  echo "patched:   $SETTINGS_FILE (backup written alongside)"
+  backup_note="(new file)"
+  if [ -f "$SETTINGS_FILE" ]; then
+    if ! cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak.$(date +%Y%m%d_%H%M%S)"; then
+      echo "error: cannot back up $SETTINGS_FILE — settings.json not patched" >&2
+      exit 1
+    fi
+    backup_note="(backup written alongside)"
+  elif ! echo '{}' > "$SETTINGS_FILE"; then
+    echo "error: cannot create $SETTINGS_FILE — settings.json not patched" >&2
+    exit 1
+  fi
+  if ! tmp=$(mktemp); then
+    echo "error: mktemp failed — $SETTINGS_FILE not patched" >&2
+    exit 1
+  fi
+  if ! jq --arg cmd "bash \"$INSTALL_DIR/statusline.sh\"" \
+       '.statusLine = {"type":"command","command":$cmd}' \
+       "$SETTINGS_FILE" > "$tmp"; then
+    echo "error: jq failed on $SETTINGS_FILE (is it valid JSON?) — left unchanged" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  if ! mv "$tmp" "$SETTINGS_FILE"; then
+    echo "error: could not write $SETTINGS_FILE — left unchanged" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  echo "patched:   $SETTINGS_FILE $backup_note"
 else
   echo ""
   echo "----- add this to $SETTINGS_FILE -----"
