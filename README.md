@@ -225,7 +225,7 @@ Line 4 lists the skills used in this session: `🪄 a · b · c · d · e +N`.
 
 ## Account name
 
-The stdin payload has no account field, so `👤 name` comes from `oauthAccount.emailAddress` in `$CLAUDE_CONFIG_DIR/.claude.json` (or `$HOME/.claude.json`). Only the part before `@` is kept — the full address and the domain are never cached or shown. The file is read in the background at most every 300s into `~/.claude/cache/account-name-<config dir key>.txt`. Nothing is shown when it can't be read.
+The stdin payload has no account field, so `👤 name` comes from `oauthAccount.emailAddress` in `$CLAUDE_CONFIG_DIR/.claude.json` (or `$HOME/.claude.json`). Only the part before `@` is kept — the full address and the domain are never cached or shown. The file is read in the background at most every 300s into `~/.claude/cache/account-name-<config dir key>.txt`. Nothing is shown when it has never been read successfully. If the file later becomes unreadable (e.g. mid-write, or moved away), the last cached name is kept and the next try is pushed out by one TTL, so the name doesn't flicker.
 
 ---
 
