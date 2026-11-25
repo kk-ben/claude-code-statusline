@@ -3,9 +3,11 @@
 #
 # What it does:
 #   1. Copies statusline.sh to $INSTALL_DIR (default: $HOME/.claude/cc-statusline)
-#   2. (--with-feeds) Copies feeds/ scripts and registers macOS LaunchAgents
-#      that refresh the feed cache hourly
-#   3. Patches $HOME/.claude/settings.json to point statusLine at the script
+#      and warns about missing dependencies (jq required; git / curl optional)
+#   2. (--with-feeds, legacy) Copies feeds/ scripts and registers macOS
+#      LaunchAgents. statusline.sh no longer shows the feeds; kept for old installs
+#   3. Patches settings.json (${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json)
+#      to point statusLine at the script
 #      (only if --patch-settings is given; otherwise prints the snippet)
 #
 # Usage:
@@ -20,7 +22,7 @@
 set -uo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.claude/cc-statusline}"
-SETTINGS_FILE="$HOME/.claude/settings.json"
+SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LABEL_PREFIX="${LABEL_PREFIX:-com.${USER}.cc-statusline}"
 
@@ -34,7 +36,7 @@ for arg in "$@"; do
     --patch-settings) PATCH_SETTINGS=1 ;;
     --uninstall)      UNINSTALL=1 ;;
     -h|--help)
-      sed -n '2,20p' "$0"; exit 0 ;;
+      sed -n '2,22p' "$0"; exit 0 ;;
     *)
       echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -61,6 +63,14 @@ mkdir -p "$INSTALL_DIR"
 cp -f "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/statusline.sh"
 chmod +x "$INSTALL_DIR/statusline.sh"
 echo "installed: $INSTALL_DIR/statusline.sh"
+
+# ---------- Dependency check (warn only) ----------
+if ! command -v jq >/dev/null 2>&1; then
+  echo "warning: jq not found — statusline.sh needs it (brew install jq / apt install jq)" >&2
+fi
+for opt in git curl; do
+  command -v "$opt" >/dev/null 2>&1 || echo "note: $opt not found — the segments that use it are left out" >&2
+done
 
 # ---------- Feeds install (optional) ----------
 if [ "$WITH_FEEDS" = "1" ]; then

@@ -1,14 +1,22 @@
 # claude-code-statusline
 
-A rich 2-line statusLine for [Claude Code](https://claude.com/claude-code) with smooth Unicode gauges, git status, last-invoked skill, task progress, Fable-only cost / duration, and a per-model token breakdown.
+A rich multi-line statusLine for [Claude Code](https://claude.com/claude-code) with smooth Unicode gauges, git status, the skills used in the session, task progress, Fable-only cost, autopilot durations, and a per-model token breakdown.
 
 ```
-[Opus 4.7] 📁 …/cc-statusline | 🌿 main | 🪄 superpowers:brainstorming
-🤖██░░░ 42% │ ⏳█▍░░░ 30% │ 📅▊░░░░ 18% │ 📖███▋░ 75% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
-F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c51.6M │ H n0/c0  │  M99.0%/S0.9%
+[Fable 5 · high] 📁 …/cc-statusline | 🌿 main
+🤖██░░░ 42% │ ⏳█▍░░░ 30% │ 📅▊░░░░ 18% │ 📖 ███▋░ 75% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱最長 12m05s · 直近 2m10s
+F n191.0k/c4.6M │ S n1.0M/c51.6M │ M99.0%/S0.9% │ 👤 alice
+🪄 superpowers:brainstorming · test-driven-development
 ```
 
-The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many tokens were newly processed (`n`) vs read from prompt cache (`c`) this session — combined across the main loop and any subagents, since a token costs the same either way. The trailing `M99.0%/S0.9%` is a separate figure: of *all* tokens combined, what share ran in the main loop vs subagents. See [Per-model token breakdown](#per-model-token-breakdown).
+| Line | Shows |
+|---|---|
+| 1 | model · effort, directory, git branch (+ 🌲 in a git worktree) |
+| 2 | gauges (context / 5h / 7d / Fable weekly), lines changed, git dirty + task progress, Fable-only cost, autopilot durations. Wraps onto more lines on narrow terminals |
+| 3 | per-model token usage (`n` new / `c` cache), main-loop vs subagent share, account name. Never wraps — the lowest-usage models are dropped first when it doesn't fit. Hidden until the first background refresh finishes |
+| 4 | up to 5 skills used in the session, newest first; `+N` = how many more were used but not shown. Hidden when no skill was used |
+
+The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many tokens were newly processed (`n`) vs read from prompt cache (`c`) this session — combined across the main loop and any subagents, since a token costs the same either way. Models with zero tokens are not shown. The trailing `M99.0%/S0.9%` is a separate figure: of *all* tokens combined, what share ran in the main loop vs subagents. See [Per-model token breakdown](#per-model-token-breakdown).
 
 ---
 
@@ -16,11 +24,12 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 
 | Segment | What it shows |
 |---|---|
-| `[model]` | `display_name` from Claude Code stdin (e.g. `Opus 4.7`); strips `(...)` parenthetical when terminal is narrow |
+| `[model · effort]` | `display_name` from Claude Code stdin (e.g. `Fable 5`); strips `(...)` parenthetical when terminal is narrow. `· effort` is `effort.level` from stdin, omitted when absent |
 | `📁 dir` | up to 3 trailing path components, collapses to basename on narrow terminals |
 | `🌿 git-branch` | current branch via `git branch --show-current` (`—` if not a repo) |
 | `🌲` (after branch) | appears only when `workspace.git_worktree` in stdin is truthy — a `git worktree` checkout rather than the main working tree. Shows the worktree name too if stdin gives one as a string, not just `true` |
-| `🪄 last-skill` | most recent `Skill` tool call from the session transcript |
+| `🪄 a · b · c +N` (line 4) | up to 5 distinct skills used in this session, newest first; see [Skills line](#skills-line) |
+| `👤 name` (line 3, trailing) | the part of the logged-in account's email before `@`; see [Account name](#account-name) |
 | `🤖 ctx-bar` | context window % with smooth 8th-block bar (yellow ≥50, red ≥60) |
 | `⏳ 5h-bar` | 5-hour session rate limit % (yellow ≥70, red ≥90) |
 | `📅 7d-bar` | 7-day rate limit % (green ≤50, yellow ≤75, red ≥76) |
@@ -28,7 +37,9 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 | `+N -M` | lines added / removed in this session |
 | `●N` / `✓` | git dirty file count, or green check if clean |
 | `✓N/M` | TaskCreate progress (completed / total) for the current `session_id` |
-| `$X.XX ⏱H:MMmSSs` | Fable-5-only cost this session (not the blended stdin total — see [Fable-only session cost](#fable-only-session-cost)) and total duration |
+| `$X.XX` | Fable-5-only cost this session (not the blended stdin total — see [Fable-only session cost](#fable-only-session-cost)) |
+| `⏱最長 Xm · 直近 Ym` | longest and latest "autopilot run" this session; see [Autopilot durations](#autopilot-durations). Labels are configurable |
+| `?` after the 📖 percent | the cached Fable weekly value is older than 15 minutes (the last refreshes failed) |
 | `F n../c.. │ O n../c.. │ S ... │ H ...` (line 3) | Per model family (Fable/Opus/Sonnet/Haiku), new-vs-cached tokens this session (main loop + subagents combined) — `n`=input+output+cache-write, `c`=cache-read — see [Per-model token breakdown](#per-model-token-breakdown) |
 | `M../S..%` (line 3, trailing) | Of all tokens combined (every model, new+cache), the percentage that ran in the main loop vs subagents — model-agnostic, a separate axis from the `n`/`c` breakdown |
 
@@ -40,6 +51,10 @@ The third line shows, per model family (Fable/Opus/Sonnet/Haiku), how many token
 - **jq** ≥ 1.5 — `brew install jq` on macOS, `apt install jq` on Debian/Ubuntu
 - **git** (only used inside git repos)
 - **curl** (only for the Fable weekly gauge, which calls the OAuth usage API)
+- standard tools: `awk`, `grep`, `sed`, `stat`, `ps` (BSD and GNU variants both work)
+- macOS only, optional: `security` (Keychain fallback for the OAuth token)
+
+Every external file the script reads is optional. When a file is missing (no transcript, no credentials, no `.claude.json`, no task dir), that segment is just left out — the script never fails.
 
 ---
 
@@ -99,7 +114,7 @@ Line 3 answers "how much did each model actually do this session, and how much o
 
    These are kept separate because summing them into one "tokens used" figure is misleading in a long session: re-reading a large accumulated context on every turn (`c`) can dwarf the actual new content (`n`) by 10-20x, making token usage look far higher than the work actually done.
 4. **Model family** is matched by substring in `message.model` (`fable`, `opus`, `sonnet`, `haiku` — case-insensitive), so it covers any dated/variant model id (`claude-fable-5`, `claude-opus-4-8`, etc.) without needing exact version strings.
-5. The result renders as, per model: `F n<new>/c<cache>`. All four models always show, even at `n0/c0`, so the line doesn't shift position turn to turn.
+5. The result renders as, per model: `F n<new>/c<cache>`, in the fixed order F/O/S/H. Line 3 is always a single line: models with zero tokens are dropped; if it still doesn't fit `term_cols`, the lowest-usage model is dropped repeatedly, and finally the `M/S` segment. The [account name](#account-name) is appended at the end.
 6. **Trailing `M../S..%`** — while summing per model, the refresher also keeps two running totals: every token (new+cache, all four models) from the main transcript, and the same from every subagent file. It caches both alongside the per-model numbers, and the render step divides them into a main-vs-subagent percentage (one decimal place, plain integer math — no `bc`/`awk`). This is a completely separate split from the `n`/`c` breakdown: it doesn't care which model did the work, only whether it ran in the main loop or a subagent, so it stays meaningful no matter which model is currently set as the main-loop model.
 
 ---
@@ -108,7 +123,10 @@ Line 3 answers "how much did each model actually do this session, and how much o
 
 | Env var | Default | Effect |
 |---|---|---|
-| `CLAUDE_STATUSLINE_COLS` | (auto-detected) | Force the column width used for line-1 truncation decisions. Useful for debugging. |
+| `CLAUDE_STATUSLINE_COLS` | (auto-detected) | Force the column width used for truncation / wrapping decisions. Useful for debugging. |
+| `CLAUDE_STATUSLINE_LABEL_LONGEST` | `最長` | Label for the longest autopilot run (e.g. `max`). |
+| `CLAUDE_STATUSLINE_LABEL_LATEST` | `直近` | Label for the latest autopilot run (e.g. `last`). |
+| `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | Set by Claude Code when a custom config/profile dir is used. The Fable weekly gauge reads credentials and keeps its cache under this dir, and the account name is read from `$CLAUDE_CONFIG_DIR/.claude.json` (else `$HOME/.claude.json`). |
 | `INSTALL_DIR` (installer) | `$HOME/.claude/cc-statusline` | Where the installer copies files. |
 | `LABEL_PREFIX` (installer) | `com.${USER}.cc-statusline` | LaunchAgent label prefix (only relevant to the legacy `--with-feeds` flag). |
 
@@ -125,15 +143,15 @@ fable_bar=$(make_bar "$fable_weekly_pct" 51 76) # Fable weekly: yellow ≥51, re
 
 ### Line-1 width truncation
 
-The script walks up the process tree to find the host terminal's real width (Claude Code passes a narrow ~67-col inner pty to the statusLine subprocess, which is misleading). That width then drives how aggressively line 1 shortens `[model]`, `📁 dir`, and `🪄 last-skill`:
+Claude Code sets the `COLUMNS` env var to the real statusline width when it runs the script, so that value is used first. Only when `COLUMNS` is unset (running the script by hand) does it walk up the process tree for a tty, then fall back to `stty` / `tput`, then 160. `CLAUDE_STATUSLINE_COLS` overrides all of these. That width drives how aggressively line 1 shortens `[model]` and `📁 dir`:
 
 | Width | Behavior |
 |---|---|
-| ≥ 140 cols | Full model name, up to 3 path components, untrimmed skill name |
-| 90–139 | Strips `(...)` from the model name, collapses dir to `…/basename`, caps skill at 24 chars |
-| < 90 | Short model word only, basename-only dir, caps skill at 14 chars |
+| ≥ 140 cols | Full model name, up to 3 path components |
+| 90–139 | Strips `(...)` from the model name, collapses dir to `…/basename` |
+| < 90 | Strips `(...)` from the model name, basename-only dir |
 
-Lines 2 and 3 aren't width-dependent — they always print in full.
+Line 2 wraps onto extra lines when it doesn't fit. Lines 3 and 4 never wrap: they drop segments instead (lowest-usage models on line 3, oldest skills on line 4).
 
 ---
 
@@ -149,6 +167,17 @@ You should see two lines with the gauges populated. To force a specific terminal
 CLAUDE_STATUSLINE_COLS=120 bash statusline.sh < examples/sample-input.json
 ```
 
+Lines 3 and 4 need a transcript. `examples/sample-transcript.jsonl` is a tiny fake one; point `transcript_path` at it and run twice (the first call starts the background refresh, the second one shows the cached result):
+
+```bash
+jq --arg t "$PWD/examples/sample-transcript.jsonl" '.transcript_path = $t' \
+  examples/sample-input.json > /tmp/cc-statusline-demo.json
+bash statusline.sh < /tmp/cc-statusline-demo.json; sleep 2
+bash statusline.sh < /tmp/cc-statusline-demo.json
+```
+
+This writes small cache files under `~/.claude/cache/` (keyed by `session_id`, here `demo-session-id`).
+
 ---
 
 ## How it talks to Claude Code
@@ -157,7 +186,8 @@ Claude Code invokes the statusLine command on every UI tick, piping a JSON paylo
 
 ```jsonc
 {
-  "model":          { "display_name": "Opus 4.7 (1M context)" },
+  "model":          { "display_name": "Fable 5 (1M context)" },
+  "effort":         { "level": "high" },
   "workspace":      { "current_dir": "/abs/path/to/cwd", "git_worktree": true },
   "transcript_path": "/abs/path/to/transcript.jsonl",
   "session_id":     "uuid",
@@ -176,7 +206,26 @@ Anything missing renders as `—` or is omitted. Output goes to stdout; exit cod
 
 Note: `cost.total_cost_usd` is present in the stdin payload but intentionally not read — the `$X.XX` segment shows a Fable-only figure recomputed from `transcript_path` instead. See [Fable-only session cost](#fable-only-session-cost).
 
-The "last skill" segment also tails the last ~500 lines of `transcript_path` looking for `tool_use` entries with `name == "Skill"`. The "task progress" segment reads `~/.claude/tasks/<session_id>/*.json` (Claude Code's TaskCreate state).
+The skills line and the autopilot durations also read `transcript_path` (in the background, see below). The "task progress" segment reads `~/.claude/tasks/<session_id>/*.json` (Claude Code's TaskCreate state).
+
+---
+
+## Skills line
+
+Line 4 lists the skills used in this session: `🪄 a · b · c · d · e +N`.
+
+- A skill use is detected in two forms in the transcript: an assistant `tool_use` with `name == "Skill"` (the name is `.input.skill`), or a `Read` of a path ending in `/skills/<name>/SKILL.md` (for agents that read the skill file directly instead of calling the Skill tool).
+- The whole transcript is scanned (not just the tail): `grep -F` picks the few candidate lines, then `jq -R 'fromjson?'` (tolerant of a half-written last line) extracts the names. A name used several times counts once, at its newest use.
+- Up to 5 names are shown, newest first. `+N` = distinct skills used but not shown. When the line doesn't fit the width, the oldest names are dropped first (the `+N` grows).
+- Cached per session in `~/.claude/cache/last-skill-<session_id>.txt`, refreshed in the background at most every 15s. The line is not printed when no skill was used.
+
+## Autopilot durations
+
+`⏱最長 12m05s · 直近 2m10s` = the longest and the latest "autopilot run" of this session. A run starts at a human input line in the transcript (not a tool result, not a meta / task-notification / command / interrupt line) and ends at the last assistant or tool-result line before the next human input. The run in progress counts up to now. A gap of 30 minutes or more between two lines cuts the run there, so idle time is not counted. Cached in `~/.claude/cache/autopilot-<session_id>.txt` (refreshed every 15s). Shows `—` until the first refresh. The two labels can be changed with `CLAUDE_STATUSLINE_LABEL_LONGEST` / `CLAUDE_STATUSLINE_LABEL_LATEST`.
+
+## Account name
+
+The stdin payload has no account field, so `👤 name` comes from `oauthAccount.emailAddress` in `$CLAUDE_CONFIG_DIR/.claude.json` (or `$HOME/.claude.json`). Only the part before `@` is kept — the full address and the domain are never cached or shown. The file is read in the background at most every 300s into `~/.claude/cache/account-name-<config dir key>.txt`. Nothing is shown when it can't be read.
 
 ---
 
@@ -184,9 +233,11 @@ The "last skill" segment also tails the last ~500 lines of `transcript_path` loo
 
 Claude Code's stdin payload only exposes `rate_limits.seven_day` (the overall weekly limit) — it does not include a Fable-5-specific number. That figure only exists in the OAuth usage API, so the `📖` gauge is fetched out-of-band instead of parsed from stdin:
 
-1. On each invocation, the script reads `~/.claude/cache/fable-weekly.txt` (a single integer, 0–100) if present and renders the gauge from it immediately — no network call on the hot path.
-2. If that cache is missing or older than 300s, a background subshell is forked (`( ... ) & disown`) to refresh it; the visible statusLine for *this* tick is never blocked on the network.
-3. The refresher reads the OAuth access token from `~/.claude/.credentials.json` (`.claudeAiOauth.accessToken`). If that file doesn't exist — GUI installs of Claude Code on macOS keep the same JSON payload in the login Keychain instead — it falls back to `security find-generic-password -s "Claude Code-credentials" -w`. The first Keychain read pops a one-time macOS permission dialog; click **Always Allow**. It then calls:
+All paths below are under the config dir: `$CLAUDE_CONFIG_DIR` when Claude Code sets it (custom profile dirs), else `~/.claude`. This keeps each profile on its own login.
+
+1. On each invocation, the script reads `<config dir>/cache/fable-weekly.txt` (a single integer, 0–100) if present and renders the gauge from it immediately — no network call on the hot path. If that value is older than 900s, a `?` is shown after the percent.
+2. A separate attempt stamp (`fable-weekly.try`) paces refreshes to one per 300s, **even when the fetch fails** — so a failing API is not re-hit on every statusline tick from every window. When it's due, a background subshell is forked (`( ... ) & disown`); the visible statusLine for *this* tick is never blocked on the network.
+3. The refresher reads the OAuth access token from `<config dir>/.credentials.json` (`.claudeAiOauth.accessToken`). If that file doesn't exist and `CLAUDE_CONFIG_DIR` is not set — GUI installs of Claude Code on macOS keep the same JSON payload in the login Keychain instead — it falls back to `security find-generic-password -s "Claude Code-credentials" -w` (only for the default config dir, since that Keychain item belongs to the default login). The first Keychain read pops a one-time macOS permission dialog; click **Always Allow**. It then calls:
    ```bash
    curl -s --max-time 5 \
      -H "Authorization: Bearer $token" \
@@ -239,7 +290,9 @@ If Anthropic changes Fable 5's pricing, update the five constants in the `jq` fo
 |---|---|
 | Statusline doesn't appear | settings.json `statusLine.command` path wrong → check `bash <that path>` works in a shell |
 | Bars never colored / always green | `ctx_used` and `seven_day_pct` are `null` in stdin — your Claude Code may be older; the script just hides those segments |
-| `🪄 —` always | Transcript path empty or no `Skill` tool calls yet this session |
+| Line 4 (`🪄 ...`) never appears | No skill used yet this session, or `transcript_path` empty / unreadable. Wait ~15s after the first skill use for the background refresh |
+| `⏱—` always | `transcript_path` empty / unreadable, or the first refresh (~15s) hasn't finished |
+| No `👤 name` | `.claude.json` has no `oauthAccount.emailAddress` (e.g. API-key login), or the first refresh hasn't finished |
 | `📖` gauge never appears | First run always shows nothing (cache not populated yet) — wait ~5s for the background fetch, or check that either `~/.claude/.credentials.json` exists or the `Claude Code-credentials` Keychain item is readable (approve the one-time **Always Allow** dialog), and that `curl` can reach `api.anthropic.com`; see [Fable weekly gauge](#fable-weekly-gauge) |
 | `$X.XX` always shows `$0.00` | Correct if Fable wasn't used this session. If Fable *was* used: check `transcript_path` is non-empty and readable, and wait ~15s for the first background refresh; see [Fable-only session cost](#fable-only-session-cost) |
 | Line 3 (`F n.../c...`) never appears, or all-zero | First run always shows nothing (cache not populated yet) — wait ~20s. If still all-zero for a model you know you used, check `transcript_path` is readable; see [Per-model token breakdown](#per-model-token-breakdown) |
@@ -291,7 +344,8 @@ Once Anthropic resolves the upstream regression, this env var can be removed.
 │   ├── com.example.cc-statusline-hn.plist
 │   └── com.example.cc-statusline-trending.plist
 ├── examples/
-│   └── sample-input.json        # for local smoke-testing
+│   ├── sample-input.json        # for local smoke-testing
+│   └── sample-transcript.jsonl  # tiny fake transcript (lines 3 and 4)
 ├── install.sh                   # installer (--with-feeds [legacy], --patch-settings, --uninstall)
 ├── LICENSE
 └── README.md

@@ -1,10 +1,11 @@
 #!/bin/bash
 # claude-code-statusline
-# A 2-line rich statusLine for Claude Code (https://claude.com/claude-code).
+# A rich multi-line statusLine for Claude Code (https://claude.com/claude-code).
 #
-# Line 1: [model] 📁 dir | 🌿 git-branch | 🪄 last-skill
-# Line 2: 🤖██░░░ 42% │ ⏳█▍░░░ 30% │ 📅▊░░░░ 18% │ 📖███▋░ 75% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱12m05s
-# Line 3: (optional) per-model token usage — F n191.0k/c4.6M │ O n0/c0 │ S n1.0M/c51.6M │ H n0/c0  │  M99.0%/S0.9%
+# Line 1: [model · effort] 📁 dir | 🌿 git-branch
+# Line 2: 🤖██░░░ 42% │ ⏳█▍░░░ 30% │ 📅▊░░░░ 18% │ 📖 ███▋░ 75% │ +120 -33 │ ✓ ✓2/5 │ $0.42 ⏱最長 12m05s · 直近 2m10s
+# Line 3: (optional) per-model token usage — F n191.0k/c4.6M │ S n1.0M/c51.6M │ M99.0%/S0.9% │ 👤 name
+# Line 4: (optional, last) 🪄 up to 5 skills used in the session, newest first (+N = how many more are not shown)
 #
 # Designed to be invoked from settings.json:
 #   "statusLine": { "type": "command", "command": "bash <path>/statusline.sh" }
@@ -17,7 +18,6 @@ input=$(cat)
 GREEN='\033[32m'
 YELLOW='\033[33m'
 RED='\033[31m'
-DIM='\033[2m'
 RESET=$'\033[0m'
 
 # --- Smooth 8th-block bar (5-char wide, 40 sub-units) ---
@@ -85,15 +85,27 @@ session_id=$(echo "$input" | "$JQ" -r '.session_id // ""')
 ctx_used=$(echo "$input" | "$JQ" -r '.context_window.used_percentage // "null"')
 seven_day_pct=$(echo "$input" | "$JQ" -r '.rate_limits.seven_day.used_percentage // "null"')
 five_hour_pct=$(echo "$input" | "$JQ" -r '.rate_limits.five_hour.used_percentage // "null"')
-total_duration_ms=$(echo "$input" | "$JQ" -r '.cost.total_duration_ms // "null"')
 lines_added=$(echo "$input" | "$JQ" -r '.cost.total_lines_added // 0')
 lines_removed=$(echo "$input" | "$JQ" -r '.cost.total_lines_removed // 0')
+effort_level=$(echo "$input" | "$JQ" -r '.effort.level // ""')
 
 # --- Fable weekly usage % (cached, refreshed async, never blocks statusline) ---
-fable_cache_dir="$HOME/.claude/cache"
+# Account / config dir (fixed 2026-11-18): Claude Code runs this script with
+# CLAUDE_CONFIG_DIR set to the window's own profile dir (measured: CLAUDE_CONFIG_DIR=
+# <profile>, HOME=<the user's home>). The old code read $HOME/.claude/.credentials.json
+# (a different login -> HTTP 429 / stale value), so credentials and the cache now
+# follow CLAUDE_CONFIG_DIR (falls back to $HOME/.claude when it is unset).
+# Retry pacing: a failed fetch used to leave the cache untouched, so the TTL stayed
+# expired and EVERY statusline call from EVERY window re-hit the API. A separate
+# attempt stamp (fable-weekly.try) now paces attempts to one per TTL even on failure.
+# A value older than fable_stale_after is shown with a trailing "?".
+cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+fable_cache_dir="$cfg_dir/cache"
 fable_cache_file="$fable_cache_dir/fable-weekly.txt"
+fable_try_file="$fable_cache_dir/fable-weekly.try"
 fable_lock_dir="$fable_cache_dir/fable-weekly.lock"
 fable_cache_ttl=300
+fable_stale_after=900
 
 fable_weekly_pct=""
 if [ -f "$fable_cache_file" ]; then
@@ -108,16 +120,23 @@ if [ -f "$fable_cache_file" ]; then
   fi
 fi
 
-fable_cache_age=999999
+fable_now=$(date +%s)
+fable_stale_mark=""
 if [ -f "$fable_cache_file" ]; then
   fable_mtime=$(stat -f %m "$fable_cache_file" 2>/dev/null || stat -c %Y "$fable_cache_file" 2>/dev/null)
-  if [ -n "$fable_mtime" ]; then
-    fable_now=$(date +%s)
-    fable_cache_age=$(( fable_now - fable_mtime ))
+  if [ -n "$fable_mtime" ] && [ $(( fable_now - fable_mtime )) -ge "$fable_stale_after" ] 2>/dev/null; then
+    fable_stale_mark="?"
   fi
 fi
 
-if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
+fable_try_age=999999
+if [ -f "$fable_try_file" ]; then
+  fable_try_mtime=$(stat -f %m "$fable_try_file" 2>/dev/null || stat -c %Y "$fable_try_file" 2>/dev/null)
+  [ -n "$fable_try_mtime" ] && fable_try_age=$(( fable_now - fable_try_mtime ))
+fi
+
+if [ "$fable_try_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
+  mkdir -p "$fable_cache_dir" 2>/dev/null
   # Clear a stale lock (fetcher killed mid-flight) so refresh can't wedge forever
   if [ -d "$fable_lock_dir" ]; then
     lock_mtime=$(stat -f %m "$fable_lock_dir" 2>/dev/null || stat -c %Y "$fable_lock_dir" 2>/dev/null)
@@ -128,15 +147,17 @@ if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
   (
     mkdir "$fable_lock_dir" 2>/dev/null || exit 0
     trap 'rmdir "$fable_lock_dir" 2>/dev/null' EXIT
-    mkdir -p "$fable_cache_dir" 2>/dev/null
-    creds_file="$HOME/.claude/.credentials.json"
+    : > "$fable_try_file" 2>/dev/null
+    creds_file="$cfg_dir/.credentials.json"
     token=""
     if [ -f "$creds_file" ]; then
       token=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
     fi
     # GUI installs of Claude Code on macOS store OAuth in the login Keychain
-    # instead of .credentials.json — same JSON payload, different location
-    if [ -z "$token" ] && [ "$(uname)" = "Darwin" ]; then
+    # instead of .credentials.json — same JSON payload, different location.
+    # Only for the default config dir: the Keychain entry below belongs to the
+    # default login, so with a custom CLAUDE_CONFIG_DIR it would be another account.
+    if [ -z "$token" ] && [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ "$(uname)" = "Darwin" ]; then
       token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
         | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
     fi
@@ -159,6 +180,67 @@ if [ "$fable_cache_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
     tmp_file="${fable_cache_file}.tmp.$$"
     printf '%s\n' "$pct" > "$tmp_file" 2>/dev/null
     mv -f "$tmp_file" "$fable_cache_file" 2>/dev/null
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+
+# --- account name (the part of the login email before "@"; cached, refreshed async) ---
+# Source (measured 2026-11-18): the statusline stdin JSON has no account field, so the name
+# comes from oauthAccount.emailAddress in the window's own global config:
+# $CLAUDE_CONFIG_DIR/.claude.json, or $HOME/.claude.json when CLAUDE_CONFIG_DIR is unset.
+# Only the text before "@" is ever kept: the full address and the domain are never cached
+# or shown. .claude.json is large, so it is read at most once per acct_ttl seconds, off the
+# hot path, into a cache keyed by the config dir. Nothing is shown when it cannot be read.
+account_seg=""
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  acct_src="$CLAUDE_CONFIG_DIR/.claude.json"
+else
+  acct_src="$HOME/.claude.json"
+fi
+acct_cache_dir="$HOME/.claude/cache"
+acct_key="${cfg_dir//[^A-Za-z0-9]/_}"
+acct_cache_file="$acct_cache_dir/account-name-${acct_key}.txt"
+acct_lock_dir="$acct_cache_dir/account-name-${acct_key}.lock"
+acct_ttl=300
+
+if [ -f "$acct_cache_file" ]; then
+  acct_name=$(head -n 1 "$acct_cache_file" 2>/dev/null | tr -d '[:space:]')
+  case "$acct_name" in
+    ''|*[!A-Za-z0-9._+-]*) : ;;
+    *) account_seg="👤 $acct_name" ;;
+  esac
+fi
+
+acct_age=999999
+if [ -f "$acct_cache_file" ]; then
+  acct_mtime=$(stat -f %m "$acct_cache_file" 2>/dev/null || stat -c %Y "$acct_cache_file" 2>/dev/null)
+  [ -n "$acct_mtime" ] && acct_age=$(( $(date +%s) - acct_mtime ))
+fi
+
+if [ "$acct_age" -ge "$acct_ttl" ] 2>/dev/null; then
+  if [ -d "$acct_lock_dir" ]; then
+    acct_lock_mtime=$(stat -f %m "$acct_lock_dir" 2>/dev/null || stat -c %Y "$acct_lock_dir" 2>/dev/null)
+    if [ -n "$acct_lock_mtime" ] && [ $(( $(date +%s) - acct_lock_mtime )) -gt 30 ]; then
+      rmdir "$acct_lock_dir" 2>/dev/null
+    fi
+  fi
+  (
+    mkdir -p "$acct_cache_dir" 2>/dev/null
+    mkdir "$acct_lock_dir" 2>/dev/null || exit 0
+    trap 'rmdir "$acct_lock_dir" 2>/dev/null' EXIT
+    acct_out=$("$JQ" -r '.oauthAccount.emailAddress // empty | split("@")[0]' "$acct_src" 2>/dev/null)
+    acct_rc=$?
+    if [ -f "$acct_src" ] && [ "$acct_rc" = "0" ]; then
+      # an address without an account name is cached as empty, so it is not re-read until the TTL passes
+      tmp_file="${acct_cache_file}.tmp.$$"
+      printf '%s\n' "$acct_out" > "$tmp_file" 2>/dev/null
+      mv -f "$tmp_file" "$acct_cache_file" 2>/dev/null
+    elif [ -f "$acct_cache_file" ]; then
+      # unreadable / mid-write: keep the old value, only push the next try out by one TTL
+      touch "$acct_cache_file" 2>/dev/null
+    else
+      : > "$acct_cache_file" 2>/dev/null
+    fi
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi
@@ -257,7 +339,9 @@ fi
 # tokens combined (all models, new+cache) — a separate axis from the n/c
 # breakdown above, and deliberately not crossed with it (see the
 # "Per-model token breakdown" section in README for why).
-model_tokens_line=""
+model_tok_segs=()
+model_tok_totals=()
+model_tok_ms_seg=""
 if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
   mtok_cache_dir="$HOME/.claude/cache"
   mtok_cache_file="$mtok_cache_dir/fable-model-tokens-${session_id}.txt"
@@ -272,19 +356,29 @@ if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" 
       case "$v" in ''|*[!0-9]*) valid=0 ;; esac
     done
     if [ "$valid" = "1" ]; then
-      model_tokens_line=$(printf 'F n%s/c%s │ O n%s/c%s │ S n%s/c%s │ H n%s/c%s' \
-        "$(fmt_tok "$c_fn")" "$(fmt_tok "$c_fc")" \
-        "$(fmt_tok "$c_on")" "$(fmt_tok "$c_oc")" \
-        "$(fmt_tok "$c_sn")" "$(fmt_tok "$c_sc")" \
-        "$(fmt_tok "$c_hn")" "$(fmt_tok "$c_hc")")
+      # One segment per model family (fixed order F/O/S/H), paired with its
+      # total token count (new+cache) so line 3 (see the priority-trim
+      # block near the bottom) can drop the lowest-usage models first when
+      # the line doesn't fit — it never wraps onto extra lines.
+      model_tok_segs=(
+        "$(printf 'F n%s/c%s' "$(fmt_tok "$c_fn")" "$(fmt_tok "$c_fc")")"
+        "$(printf 'O n%s/c%s' "$(fmt_tok "$c_on")" "$(fmt_tok "$c_oc")")"
+        "$(printf 'S n%s/c%s' "$(fmt_tok "$c_sn")" "$(fmt_tok "$c_sc")")"
+        "$(printf 'H n%s/c%s' "$(fmt_tok "$c_hn")" "$(fmt_tok "$c_hc")")"
+      )
+      model_tok_totals=(
+        "$(( c_fn + c_fc ))"
+        "$(( c_on + c_oc ))"
+        "$(( c_sn + c_sc ))"
+        "$(( c_hn + c_hc ))"
+      )
       grand=$(( c_main + c_sub ))
       if [ "$grand" -gt 0 ]; then
         main_tenths=$(( c_main * 1000 / grand ))
         sub_tenths=$(( c_sub * 1000 / grand ))
-        ms_seg=$(printf '  │  M%d.%d%%/S%d.%d%%' \
+        model_tok_ms_seg=$(printf 'M%d.%d%%/S%d.%d%%' \
           $(( main_tenths / 10 )) $(( main_tenths % 10 )) \
           $(( sub_tenths / 10 )) $(( sub_tenths % 10 )))
-        model_tokens_line="${model_tokens_line}${ms_seg}"
       fi
     fi
   fi
@@ -402,13 +496,187 @@ if [ -n "$current_dir" ] && [ -d "$current_dir" ]; then
   fi
 fi
 
-# --- last skill from transcript ---
-last_skill="—"
-if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-  last_skill=$(tail -n 500 "$transcript_path" 2>/dev/null \
-    | "$JQ" -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use" and .name=="Skill") | .input.skill // empty' 2>/dev/null \
-    | tail -n 1)
-  [ -z "$last_skill" ] && last_skill="—"
+# --- last skill from transcript (cached per-session, refreshed async) ---
+# Skill use is recorded in two forms (measured 2026-11-18):
+#  (a) assistant tool_use name=="Skill"  -> .input.skill      (windows that have the Skill tool)
+#  (b) assistant tool_use name=="Read" of .../skills/<name>/SKILL.md
+#      (the fable-coordinator parent windows have no Skill tool and read SKILL.md directly)
+# The old detector only knew (a) and only scanned `tail -n 500` lines, so parent
+# windows (b) and any long session (last use older than 500 lines) always showed "—".
+# Now both forms are scanned over the whole transcript, off the hot path: grep -F
+# prefilters the few candidate lines, jq (-R + fromjson?, tolerant of a torn line)
+# picks the last five distinct names (newest first, a repeated name counts once at its
+# newest use); result cached per session like the other blocks. The names are shown on
+# their own line (line 4, "🪄 a · b · c · d · e +N", N = distinct names not shown) —
+# nothing is printed when no skill was used.
+# Cache format: up to 5 name lines, then one "#total=<all distinct names>" line (only when
+# at least one name exists). A cache without the "#total=" line (older format) is read as
+# total == number of names, i.e. no "+N".
+skill_names=()
+skill_total=0
+if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+  skill_cache_dir="$HOME/.claude/cache"
+  skill_cache_file="$skill_cache_dir/last-skill-${session_id}.txt"
+  skill_lock_dir="$skill_cache_dir/last-skill-${session_id}.lock"
+  skill_ttl=15
+
+  if [ -f "$skill_cache_file" ]; then
+    while IFS= read -r cached_skill; do
+      cached_skill="${cached_skill//[[:space:]]/}"
+      case "$cached_skill" in
+        ''|—) continue ;;
+        '#total='*) skill_total="${cached_skill#\#total=}"; continue ;;
+        '#'*) continue ;;
+      esac
+      [ "${#skill_names[@]}" -lt 5 ] && skill_names+=("$cached_skill")
+    done < "$skill_cache_file"
+    case "$skill_total" in ''|*[!0-9]*) skill_total=0 ;; esac
+    [ "$skill_total" -lt "${#skill_names[@]}" ] && skill_total="${#skill_names[@]}"
+  fi
+
+  skill_age=999999
+  if [ -f "$skill_cache_file" ]; then
+    skill_mtime=$(stat -f %m "$skill_cache_file" 2>/dev/null || stat -c %Y "$skill_cache_file" 2>/dev/null)
+    [ -n "$skill_mtime" ] && skill_age=$(( $(date +%s) - skill_mtime ))
+  fi
+
+  if [ "$skill_age" -ge "$skill_ttl" ] 2>/dev/null; then
+    if [ -d "$skill_lock_dir" ]; then
+      skill_lock_mtime=$(stat -f %m "$skill_lock_dir" 2>/dev/null || stat -c %Y "$skill_lock_dir" 2>/dev/null)
+      if [ -n "$skill_lock_mtime" ] && [ $(( $(date +%s) - skill_lock_mtime )) -gt 30 ]; then
+        rmdir "$skill_lock_dir" 2>/dev/null
+      fi
+    fi
+    (
+      mkdir -p "$skill_cache_dir" 2>/dev/null
+      mkdir "$skill_lock_dir" 2>/dev/null || exit 0
+      trap 'rmdir "$skill_lock_dir" 2>/dev/null' EXIT
+      skill_jq='
+        fromjson? | select(.type=="assistant") | .message.content[]?
+        | select(type=="object" and .type=="tool_use")
+        | if .name=="Skill" then (.input.skill // empty)
+          elif .name=="Read" then ((.input.file_path // "") | select(test("/skills/[^/]+/SKILL\\.md$")) | sub("^.*/skills/";"") | sub("/SKILL\\.md$";""))
+          else empty end'
+      found=$(grep -a -F -e '"name":"Skill"' -e 'SKILL.md' "$transcript_path" 2>/dev/null \
+        | grep -a -F '"type":"assistant"' \
+        | "$JQ" -R -r "$skill_jq" 2>/dev/null \
+        | awk '{ a[NR] = $0 } END { for (i = NR; i >= 1; i--) if (!seen[a[i]]++) { t++; if (t <= 5) print a[i] } if (t > 0) print "#total=" t }')
+      tmp_file="${skill_cache_file}.tmp.$$"
+      # An empty result is cached too (as "—") so a session with no skill use is not rescanned every call
+      printf '%s\n' "${found:-—}" > "$tmp_file" 2>/dev/null
+      mv -f "$tmp_file" "$skill_cache_file" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+fi
+
+# --- autopilot durations (cached per-session, refreshed async) ---
+# Replaces the old elapsed-time readout. One "autopilot run" = from a human input
+# line (type=user, not tool_result, not isMeta, origin.kind=="human" — or, in
+# transcripts without origin, not a task-notification / command / interrupt / summary
+# line) to the timestamp of the last assistant / tool_result line before the next
+# human input. The run in progress is counted as (now − start); it is "in progress"
+# when the last assistant/tool_result line is a tool_result or an assistant turn whose
+# stop_reason is not end_turn/stop_sequence/max_tokens/refusal, and no interrupt
+# marker follows. Cache line: "<longest_closed_sec> <last_start_epoch> <last_end_epoch> <running 0|1>".
+# Idle gaps are not counted (since 2026-11-18): when two adjacent counted lines (human input /
+# assistant / tool_result) are ap_gap_limit seconds or more apart, the run is cut there — it ends
+# at the earlier line and a new run starts at the later one. A run in progress whose last line
+# is ap_gap_limit seconds or more old is not treated as running (its duration is end − start).
+ap_gap_limit=1800   # the single place that sets the idle-gap cut (seconds)
+# Labels for the two durations; override with env vars (e.g. "max" / "last").
+ap_label_longest="${CLAUDE_STATUSLINE_LABEL_LONGEST:-最長}"
+ap_label_latest="${CLAUDE_STATUSLINE_LABEL_LATEST:-直近}"
+ap_str="—"
+if [ -n "$session_id" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+  ap_cache_dir="$HOME/.claude/cache"
+  ap_cache_file="$ap_cache_dir/autopilot-${session_id}.txt"
+  ap_lock_dir="$ap_cache_dir/autopilot-${session_id}.lock"
+  ap_ttl=15
+
+  fmt_dur() {
+    local s="${1:-0}"
+    case "$s" in ''|*[!0-9]*) s=0 ;; esac
+    if [ "$s" -ge 3600 ]; then
+      printf '%dh%dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+    else
+      printf '%dm%ds' $(( s / 60 )) $(( s % 60 ))
+    fi
+  }
+
+  if [ -f "$ap_cache_file" ]; then
+    IFS=' ' read -r ap_max ap_start ap_end ap_run < "$ap_cache_file" 2>/dev/null
+    ap_valid=1
+    for v in "$ap_max" "$ap_start" "$ap_end" "$ap_run"; do
+      case "$v" in ''|*[!0-9]*) ap_valid=0 ;; esac
+    done
+    if [ "$ap_valid" = "1" ] && [ "$ap_start" -gt 0 ]; then
+      ap_now=$(date +%s)
+      if [ "$ap_run" = "1" ] && [ $(( ap_now - ap_end )) -lt "$ap_gap_limit" ]; then
+        ap_recent=$(( ap_now - ap_start ))
+      else
+        ap_recent=$(( ap_end - ap_start ))
+      fi
+      [ "$ap_recent" -lt 0 ] && ap_recent=0
+      ap_longest="$ap_max"
+      [ "$ap_recent" -gt "$ap_longest" ] && ap_longest="$ap_recent"
+      ap_str="${ap_label_longest} $(fmt_dur "$ap_longest") · ${ap_label_latest} $(fmt_dur "$ap_recent")"
+    fi
+  fi
+
+  ap_age=999999
+  if [ -f "$ap_cache_file" ]; then
+    ap_mtime=$(stat -f %m "$ap_cache_file" 2>/dev/null || stat -c %Y "$ap_cache_file" 2>/dev/null)
+    [ -n "$ap_mtime" ] && ap_age=$(( $(date +%s) - ap_mtime ))
+  fi
+
+  if [ "$ap_age" -ge "$ap_ttl" ] 2>/dev/null; then
+    if [ -d "$ap_lock_dir" ]; then
+      ap_lock_mtime=$(stat -f %m "$ap_lock_dir" 2>/dev/null || stat -c %Y "$ap_lock_dir" 2>/dev/null)
+      if [ -n "$ap_lock_mtime" ] && [ $(( $(date +%s) - ap_lock_mtime )) -gt 30 ]; then
+        rmdir "$ap_lock_dir" 2>/dev/null
+      fi
+    fi
+    (
+      mkdir -p "$ap_cache_dir" 2>/dev/null
+      mkdir "$ap_lock_dir" 2>/dev/null || exit 0
+      trap 'rmdir "$ap_lock_dir" 2>/dev/null' EXIT
+      ap_jq='
+        def ts: .timestamp | sub("\\.[0-9]+Z$";"Z") | fromdateiso8601;
+        def txt: (.message.content | if type=="string" then . else (map(select(type=="object" and .type=="text") | .text) | join(" ")) end);
+        def has_tr: ((.message.content | type)=="array") and (.message.content | any(.[]; type=="object" and .type=="tool_result"));
+        def synth: (txt | test("^\\s*(<task-notification>|<command-name>|<local-command|<system-reminder>|This session is being continued|\\[Request interrupted|Caveat:)"));
+        def is_human: .type=="user" and (.isMeta != true) and (has_tr | not)
+          and (if .origin.kind != null then .origin.kind == "human"
+               elif .turnOrigin != null then .turnOrigin == "human"
+               else (synth | not) end);
+        def is_stop: .type=="user" and (.isMeta != true) and (has_tr | not)
+          and (.origin.kind == null) and (.turnOrigin == null) and (txt | test("^\\s*\\[Request interrupted"));
+        def is_act: .type=="assistant" or (.type=="user" and has_tr);
+        reduce (inputs | select((.type=="user" or .type=="assistant") and (.isSidechain != true) and (.timestamp != null))) as $l
+          ({max:0, start:null, end:null, run:false};
+            ($l | ts) as $t
+            | if ($l | is_human) then
+                (if .start != null then .max = ([.max, (.end - .start)] | max) else . end)
+                | .start = $t | .end = $t | .run = true
+              elif ($l | is_stop) then .run = false
+              elif ($l | is_act) and (.start != null) then
+                (if ($t - .end) >= $gap then .max = ([.max, (.end - .start)] | max) | .start = $t else . end)
+                | .end = $t
+                | .run = ($l.type == "user" or (($l.message.stop_reason // "") | IN("end_turn","stop_sequence","max_tokens","refusal") | not))
+              else . end)
+        | [.max, (.start // 0), (.end // 0), (if .run then 1 else 0 end)] | map(floor) | @tsv'
+      ap_out=$("$JQ" -n -r --argjson gap "$ap_gap_limit" "$ap_jq" "$transcript_path" 2>/dev/null | tr '\t' ' ')
+      IFS=' ' read -r o_max o_start o_end o_run <<< "$ap_out"
+      for v in "$o_max" "$o_start" "$o_end" "$o_run"; do
+        case "$v" in ''|*[!0-9]*) exit 0 ;; esac
+      done
+      tmp_file="${ap_cache_file}.tmp.$$"
+      printf '%s %s %s %s\n' "$o_max" "$o_start" "$o_end" "$o_run" > "$tmp_file" 2>/dev/null
+      mv -f "$tmp_file" "$ap_cache_file" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
 fi
 
 # --- task progress (completed/total) from ~/.claude/tasks/<session_id>/ ---
@@ -435,31 +703,43 @@ if [ -n "$session_id" ]; then
 fi
 
 # --- Detect terminal width ---
-# Claude Code invokes the statusline child with its own narrow inner pty
-# (≈67 cols, = the UI pane width). /dev/tty, tput cols, stty size, and the
-# JSON input all reflect that inner pty, not the real terminal. Real width
-# is found by walking up the process tree to Claude Code's own tty.
+# Claude Code (verified 2026-08-05 against CLI v2.1.219 source + a runtime
+# capture) sets the COLUMNS env var to the actual statusline-pane width
+# (process.stdout.columns) when it spawns this script — stdin JSON carries
+# no width field. COLUMNS is the authoritative value and must be trusted
+# first: a runtime capture showed COLUMNS=64 (the real pane width) while
+# walking the process tree for an outer tty found 70 cols from a wider,
+# unrelated outer terminal — that mismatch is the confirmed root cause of
+# line 2 failing to wrap in production (Cursor Remote-SSH). The process-tree
+# walk and other fallbacks below now only run when COLUMNS is unset (e.g.
+# invoking this script by hand outside Claude Code).
 term_cols=0
-pid=$$
-for hop in 1 2 3 4 5 6 7 8; do
-  parent_pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-  if [ -z "$parent_pid" ] || [ "$parent_pid" = "0" ] || [ "$parent_pid" = "1" ]; then
-    break
-  fi
-  pid="$parent_pid"
-  ptty=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ')
-  if [ -z "$ptty" ] || [ "$ptty" = "?" ] || [ "$ptty" = "??" ]; then
-    continue
-  fi
-  ptty_path="/dev/$ptty"
-  [ -e "$ptty_path" ] || continue
-  sz=$(stty size < "$ptty_path" 2>/dev/null | awk '{print $2}')
-  if [ -n "$sz" ] && [ "$sz" -gt 0 ] 2>/dev/null; then
-    if [ "$sz" -gt "$term_cols" ] 2>/dev/null; then
-      term_cols="$sz"
+if [ -n "${COLUMNS:-}" ] && [ "$COLUMNS" -gt 0 ] 2>/dev/null; then
+  term_cols="$COLUMNS"
+fi
+
+if ! [ "$term_cols" -gt 0 ] 2>/dev/null; then
+  pid=$$
+  for _ in 1 2 3 4 5 6 7 8; do
+    parent_pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -z "$parent_pid" ] || [ "$parent_pid" = "0" ] || [ "$parent_pid" = "1" ]; then
+      break
     fi
-  fi
-done
+    pid="$parent_pid"
+    ptty=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ')
+    if [ -z "$ptty" ] || [ "$ptty" = "?" ] || [ "$ptty" = "??" ]; then
+      continue
+    fi
+    ptty_path="/dev/$ptty"
+    [ -e "$ptty_path" ] || continue
+    sz=$(stty size < "$ptty_path" 2>/dev/null | awk '{print $2}')
+    if [ -n "$sz" ] && [ "$sz" -gt 0 ] 2>/dev/null; then
+      if [ "$sz" -gt "$term_cols" ] 2>/dev/null; then
+        term_cols="$sz"
+      fi
+    fi
+  done
+fi
 
 # Fallbacks
 if ! [ "$term_cols" -gt 0 ] 2>/dev/null; then
@@ -471,9 +751,6 @@ if ! [ "$term_cols" -gt 0 ] 2>/dev/null; then
   term_cols=$(tput cols 2>/dev/null || echo 0)
 fi
 if ! [ "$term_cols" -gt 0 ] 2>/dev/null; then
-  term_cols="${COLUMNS:-0}"
-fi
-if ! [ "$term_cols" -gt 0 ] 2>/dev/null; then
   term_cols=160
 fi
 # Manual override: env CLAUDE_STATUSLINE_COLS=<n> forces a width.
@@ -482,10 +759,10 @@ if [ -n "${CLAUDE_STATUSLINE_COLS:-}" ] && [ "$CLAUDE_STATUSLINE_COLS" -gt 0 ] 2
 fi
 
 # --- LINE 1 (dynamic truncation by terminal width) ---
-# Width bands drive how aggressively we shorten model / dir / skill.
+# Width bands drive how aggressively we shorten model / dir.
 #   term_cols ≥ 140 : full everything
-#   90 ≤ cols < 140 : strip "(...)" suffix from model, collapse dir to "…/basename", cap skill at 24
-#   cols < 90       : short model word only, basename-only dir, cap skill at 14
+#   90 ≤ cols < 140 : strip "(...)" suffix from model, collapse dir to "…/basename"
+#   cols < 90       : short model word only, basename-only dir
 
 if [ "$term_cols" -lt 140 ] 2>/dev/null; then
   model_disp=$(printf '%s' "$model" | sed -E 's/ *\([^)]*\) *$//')
@@ -503,27 +780,12 @@ else
   dir_disp="$dir_last3"
 fi
 
-trim_ascii() {
-  local s="$1" cap="$2" out="" i
-  for ((i=0; i<${#s} && i<cap; i++)); do
-    out="${out}${s:$i:1}"
-  done
-  if [ "${#s}" -gt "$cap" ]; then
-    out="${out}…"
-  fi
-  printf '%s' "$out"
-}
-skill_disp="$last_skill"
-if [ "$skill_disp" != "—" ] && [ -n "$skill_disp" ]; then
-  if [ "$term_cols" -lt 90 ] 2>/dev/null; then
-    skill_disp=$(trim_ascii "$last_skill" 14)
-  elif [ "$term_cols" -lt 140 ] 2>/dev/null; then
-    skill_disp=$(trim_ascii "$last_skill" 24)
-  fi
-fi
+# effort.level comes straight from the stdin JSON; absent (model has no effort parameter) -> nothing is shown
+model_label="$model_disp"
+[ -n "$effort_level" ] && model_label="${model_disp} · ${effort_level}"
 
-printf "[%s] 📁 %s | 🌿 %s%s | 🪄 %s\n" \
-  "$model_disp" "$dir_disp" "$git_branch" "$worktree_marker" "$skill_disp"
+printf "[%s] 📁 %s | 🌿 %s%s\n" \
+  "$model_label" "$dir_disp" "$git_branch" "$worktree_marker"
 
 # --- LINE 2 components ---
 
@@ -556,7 +818,7 @@ fi
 fable_seg=""
 if [ -n "$fable_weekly_pct" ]; then
   fable_bar=$(make_bar "$fable_weekly_pct" 51 76)
-  fable_seg=$(printf "📖 %b %s%%" "$fable_bar" "$fable_weekly_pct")
+  fable_seg=$(printf "📖 %b %s%%%s" "$fable_bar" "$fable_weekly_pct" "$fable_stale_mark")
 fi
 
 # lines added / removed this session
@@ -572,21 +834,8 @@ else
   cost_str="\$0.00"
 fi
 
-# duration (h/m when long, m/s otherwise)
-if [ "$total_duration_ms" = "null" ]; then
-  duration_str="0m"
-else
-  total_sec=$(printf "%.0f" "$(echo "$total_duration_ms / 1000" | bc -l 2>/dev/null || echo 0)")
-  dur_min=$((total_sec / 60))
-  if [ "$dur_min" -ge 60 ]; then
-    dur_h=$((dur_min / 60))
-    dur_m=$((dur_min % 60))
-    duration_str="${dur_h}h${dur_m}m"
-  else
-    dur_sec=$((total_sec % 60))
-    duration_str="${dur_min}m${dur_sec}s"
-  fi
-fi
+# duration: autopilot longest / latest (see the "autopilot durations" block above)
+duration_str="$ap_str"
 
 # local state group (git dirty + tasks)
 local_state=""
@@ -609,24 +858,124 @@ metrics=()
 [ -n "$local_state" ]  && metrics+=("$local_state")
 metrics+=("${cost_str} ⏱${duration_str}")
 
-# Join an array of sections with " │ "
+# Visible length of a section (ANSI color codes stripped, since they take
+# zero terminal columns but would otherwise inflate the wrap-width count).
+visible_len() {
+  local stripped
+  stripped=$(printf '%b' "$1" | sed -E 's/\x1b\[[0-9;]*m//g')
+  printf '%s' "$stripped" | wc -m | tr -d ' '
+}
+
+# Join an array of sections with " │ ", wrapping onto additional lines
+# (rather than letting the terminal hard-truncate) once the running width
+# would exceed term_cols. Each wrapped line is emitted separately so line 2
+# can spill onto line 3+ on narrow terminals.
 join_sections() {
-  local out=""
   local sep=" │ "
-  local first=1
+  local sep_len=3
+  local -a wrapped=()
+  local cur="" cur_len=0
+  local seg seg_len
   for seg in "$@"; do
-    if [ "$first" = "1" ]; then
-      out="$seg"; first=0
+    seg_len=$(visible_len "$seg")
+    if [ -z "$cur" ]; then
+      cur="$seg"; cur_len="$seg_len"
+    elif [ $(( cur_len + sep_len + seg_len )) -le "$term_cols" ]; then
+      cur="${cur}${sep}${seg}"
+      cur_len=$(( cur_len + sep_len + seg_len ))
     else
-      out="${out}${sep}${seg}"
+      wrapped+=("$cur")
+      cur="$seg"; cur_len="$seg_len"
     fi
   done
-  printf '%b\n' "$out"
+  [ -n "$cur" ] && wrapped+=("$cur")
+  local line
+  for line in "${wrapped[@]}"; do
+    printf '%b\n' "$line"
+  done
 }
 
 # --- LINE 2: metrics ---
 join_sections "${metrics[@]}"
 
 # --- LINE 3 (optional): per-model token usage, main loop vs subagents ---
-[ -n "$model_tokens_line" ] && printf '%s\n' "$model_tokens_line"
+# Always a single line — never wraps. When the full breakdown doesn't fit
+# in term_cols, segments are dropped in priority order until it does:
+#   1. zero-token models are dropped outright (they carry no information)
+#   2. if still too wide, the remaining lowest-usage model is dropped,
+#      repeating until only the highest-usage model(s) are left
+#   3. finally the trailing M/S (main-vs-subagent) segment is dropped
+# With room to spare, all segments show as before.
+if [ "${#model_tok_segs[@]}" -gt 0 ]; then
+  mt_active=(1 1 1 1)
+  for mt_i in 0 1 2 3; do
+    [ "${model_tok_totals[$mt_i]}" -eq 0 ] && mt_active[$mt_i]=0
+  done
+  mt_show_ms=1
+  [ -z "$model_tok_ms_seg" ] && mt_show_ms=0
+
+  build_line3() {
+    local out="" first=1 i
+    for i in 0 1 2 3; do
+      if [ "${mt_active[$i]}" = "1" ]; then
+        if [ "$first" = "1" ]; then out="${model_tok_segs[$i]}"; first=0
+        else out="${out} │ ${model_tok_segs[$i]}"; fi
+      fi
+    done
+    if [ "$mt_show_ms" = "1" ]; then
+      if [ "$first" = "1" ]; then out="$model_tok_ms_seg"; first=0
+      else out="${out} │ ${model_tok_ms_seg}"; fi
+    fi
+    if [ -n "$account_seg" ]; then
+      if [ "$first" = "1" ]; then out="$account_seg"; first=0
+      else out="${out} │ ${account_seg}"; fi
+    fi
+    printf '%s' "$out"
+  }
+
+  mt_line=$(build_line3)
+  mt_len=$(visible_len "$mt_line")
+
+  while [ -n "$mt_line" ] && [ "$mt_len" -gt "$term_cols" ] 2>/dev/null; do
+    mt_min_i=-1
+    mt_min_val=-1
+    for mt_i in 0 1 2 3; do
+      if [ "${mt_active[$mt_i]}" = "1" ]; then
+        if [ "$mt_min_i" = "-1" ] || [ "${model_tok_totals[$mt_i]}" -lt "$mt_min_val" ]; then
+          mt_min_i="$mt_i"; mt_min_val="${model_tok_totals[$mt_i]}"
+        fi
+      fi
+    done
+    if [ "$mt_min_i" != "-1" ]; then
+      mt_active[$mt_min_i]=0
+    elif [ "$mt_show_ms" = "1" ]; then
+      mt_show_ms=0
+    else
+      break
+    fi
+    mt_line=$(build_line3)
+    mt_len=$(visible_len "$mt_line")
+  done
+
+  [ -n "$mt_line" ] && printf '%s\n' "$mt_line"
+fi
+
+# --- LINE 4 (optional): skills used in this session, newest first (max 5) ---
+# Never wraps: when it does not fit in term_cols the oldest names are dropped first.
+# The rest that is not shown (more than 5 used, or names dropped for width) is appended
+# as " +N" (N = skill_total - shown names); the width check includes the " +N".
+# Not printed at all when the session has used no skill.
+if [ "${#skill_names[@]}" -gt 0 ]; then
+  sk_n="${#skill_names[@]}"
+  while :; do
+    sk_line="🪄 ${skill_names[0]}"
+    for ((sk_i = 1; sk_i < sk_n; sk_i++)); do sk_line="${sk_line} · ${skill_names[$sk_i]}"; done
+    sk_more=$(( skill_total - sk_n ))
+    [ "$sk_more" -gt 0 ] && sk_line="${sk_line} +${sk_more}"
+    [ "$sk_n" -le 1 ] && break
+    [ "$(visible_len "$sk_line")" -le "$term_cols" ] 2>/dev/null && break
+    sk_n=$(( sk_n - 1 ))
+  done
+  printf '%s\n' "$sk_line"
+fi
 exit 0
