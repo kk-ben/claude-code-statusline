@@ -163,7 +163,15 @@ if [ "$fable_try_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
     # Only for the default config dir ($HOME/.claude, whether CLAUDE_CONFIG_DIR is
     # unset or explicitly points at it): the Keychain entry below belongs to the
     # default login, so with a custom config dir it would be another account.
-    if [ -z "$token" ] && [ "${cfg_dir%/}" = "${HOME%/}/.claude" ] && [ "$(uname)" = "Darwin" ]; then
+    # Compare with repeated and trailing slashes collapsed (HOME may end in "/").
+    # (The replacement is a bare "/": in bash 3.2, the macOS default, "\/" would
+    # leave a literal backslash in the result.)
+    cfg_norm="$cfg_dir"
+    while [ "${cfg_norm#*//}" != "$cfg_norm" ]; do cfg_norm="${cfg_norm//\/\///}"; done
+    cfg_norm="${cfg_norm%/}"
+    def_norm="${HOME%/}/.claude"
+    while [ "${def_norm#*//}" != "$def_norm" ]; do def_norm="${def_norm//\/\///}"; done
+    if [ -z "$token" ] && { [ -z "${CLAUDE_CONFIG_DIR:-}" ] || [ "$cfg_norm" = "$def_norm" ]; } && [ "$(uname)" = "Darwin" ]; then
       token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
         | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
     fi
