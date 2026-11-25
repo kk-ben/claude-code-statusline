@@ -160,9 +160,10 @@ if [ "$fable_try_age" -ge "$fable_cache_ttl" ] 2>/dev/null; then
     fi
     # GUI installs of Claude Code on macOS store OAuth in the login Keychain
     # instead of .credentials.json — same JSON payload, different location.
-    # Only for the default config dir: the Keychain entry below belongs to the
-    # default login, so with a custom CLAUDE_CONFIG_DIR it would be another account.
-    if [ -z "$token" ] && [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ "$(uname)" = "Darwin" ]; then
+    # Only for the default config dir ($HOME/.claude, whether CLAUDE_CONFIG_DIR is
+    # unset or explicitly points at it): the Keychain entry below belongs to the
+    # default login, so with a custom config dir it would be another account.
+    if [ -z "$token" ] && [ "${cfg_dir%/}" = "${HOME%/}/.claude" ] && [ "$(uname)" = "Darwin" ]; then
       token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
         | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
     fi
